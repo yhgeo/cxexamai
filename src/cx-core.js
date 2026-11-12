@@ -317,7 +317,14 @@
   window.__cxGrab = function (force) {
     SENT = {};
     var n = collect(true);
-    post('log', 'manual grab ' + n + ' total=' + Q.length);
+    post('log', 'manual grab ' + n + ' total=' + Q.length + ' url=' + location.href);
+    if (n === 0) {
+      try { post('dom', (document.documentElement.outerHTML || '').slice(0, 400000)); } catch (e) {}
+      try {
+        var t = (document.body ? document.body.innerText : '').slice(0, 600);
+        post('log', 'page text: ' + t.replace(/\s+/g, ' '));
+      } catch (e) {}
+    }
     return n;
   };
 

@@ -13,6 +13,7 @@ extern unsigned int cx_core_js_len;
 static NSHashTable *gWebViews;
 static NSHashTable *gExamWebViews;
 static NSMutableSet *gAnswered;
+static NSTimeInterval gLastMsgAt = 0;
 static char kInstalledKey;
 
 @interface CXWeb (Install)
@@ -27,6 +28,7 @@ static char kInstalledKey;
 @implementation CXMessageHandler
 
 - (void)userContentController:(WKUserContentController *)ucc didReceiveScriptMessage:(WKScriptMessage *)message {
+    gLastMsgAt = [NSDate date].timeIntervalSince1970;
     id body = message.body;
     if (![body isKindOfClass:[NSDictionary class]]) return;
     NSString *type = body[@"t"];
@@ -147,16 +149,69 @@ static char kInstalledKey;
     CXLOG(@"已安装注入脚本 %lu bytes", (unsigned long)js.length);
 }
 
++ (NSString *)coreJS {
+    static NSString *js;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        js = [[NSString alloc] initWithBytes:cx_core_js length:cx_core_js_len encoding:NSUTF8StringEncoding];
+    });
+    return js ?: @"";
+}
+
++ (void)grabIn:(WKWebView *)wv {
+    [wv evaluateJavaScript:@"window.__cxGrab?window.__cxGrab(true):-1" completionHandler:^(id r, NSError *e) {
+        if (e) {
+            CXLOG(@"grab 执行失败 %@", e.localizedDescription);
+            [[CXHUD shared] setStatus:@"JS错误"];
+            return;
+        }
+        CXLOG(@"grab 返回 %@", r);
+        NSInteger n = [r respondsToSelector:@selector(integerValue)] ? [r integerValue] : -1;
+        if (n < 0) [[CXHUD shared] setStatus:@"JS未注入"];
+        else [[CXHUD shared] setStatus:[NSString stringWithFormat:@"抓到%ld题", (long)n]];
+    }];
+}
+
 + (void)manualTrigger {
     NSArray *list = nil;
     @synchronized (gExamWebViews) { list = gExamWebViews.allObjects; }
     if (list.count == 0) {
         @synchronized (gWebViews) { list = gWebViews.allObjects; }
     }
-    for (WKWebView *wv in list) {
-        [wv evaluateJavaScript:@"window.__cxGrab&&window.__cxGrab(true)" completionHandler:nil];
+    if (list.count == 0) {
+        CXLOG(@"手动触发：没有捕获到任何 WKWebView（考试页可能不是 H5）");
+        [[CXHUD shared] setStatus:@"无WebView"];
+        return;
     }
-    [[CXHUD shared] setStatus:@"已触发"];
+    CXLOG(@"手动触发：webview %lu 个", (unsigned long)list.count);
+    NSTimeInterval before = gLastMsgAt;
+    [[CXHUD shared] setStatus:@"抓题中"];
+
+    for (WKWebView *wv in list) {
+        CXLOG(@"  url=%@", wv.URL.absoluteString);
+        [wv evaluateJavaScript:@"(typeof window.__cxGrab==='function')?'ok':'no'" completionHandler:^(id r, NSError *e) {
+            if (e) CXLOG(@"探针失败 %@", e.localizedDescription);
+            if ([r isKindOfClass:[NSString class]] && [r isEqualToString:@"ok"]) {
+                [self grabIn:wv];
+            } else {
+                CXLOG(@"JS 未注入，现场补注入");
+                [[CXHUD shared] setStatus:@"补注入"];
+                [wv evaluateJavaScript:[self coreJS] completionHandler:^(id r2, NSError *e2) {
+                    if (e2) CXLOG(@"补注入失败 %@", e2.localizedDescription);
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                        [self grabIn:wv];
+                    });
+                }];
+            }
+        }];
+    }
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (gLastMsgAt <= before) {
+            CXLOG(@"4 秒内没有任何消息回传");
+            [[CXHUD shared] setStatus:@"JS无响应"];
+        }
+    });
 }
 
 @end
@@ -169,7 +224,21 @@ static char kInstalledKey;
     if (!configuration) configuration = [WKWebViewConfiguration new];
     [CXWeb installIntoConfiguration:configuration];
     id v = [self cx_initWithFrame:frame configuration:configuration];
-    if (v) @synchronized (gWebViews) { [gWebViews addObject:v]; }
+    if (v) {
+        @synchronized (gWebViews) { [gWebViews addObject:v]; }
+        __weak WKWebView *weakV = v;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            WKWebView *wv = weakV;
+            if (!wv) return;
+            [wv evaluateJavaScript:@"(typeof window.__cxCore==='undefined')?0:1" completionHandler:^(id r, NSError *e) {
+                if (e) return;
+                if ([r integerValue] == 0) {
+                    CXLOG(@"延迟补注入 %@", wv.URL.absoluteString);
+                    [wv evaluateJavaScript:[CXWeb coreJS] completionHandler:nil];
+                }
+            }];
+        });
+    }
     return v;
 }
 

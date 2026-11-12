@@ -3,6 +3,7 @@
 #import "CXWeb.h"
 #import "CXHUD.h"
 #import "CXGuard.h"
+#import "CXNativeProbe.h"
 
 __attribute__((constructor))
 static void CXEntry(void) {
@@ -13,6 +14,7 @@ static void CXEntry(void) {
         CXLOG(@"======== CXExamAI %@ 注入 (%@) ========", CX_VERSION, bid);
         [CXWeb start];
         [CXGuard start];
+        [CXNativeProbe start];
 
         dispatch_async(dispatch_get_main_queue(), ^{
             [[CXHUD shared] install];
