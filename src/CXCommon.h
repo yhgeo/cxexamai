@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-#define CX_VERSION @"1.5.0"
+#define CX_VERSION @"1.6.0"
 #define CXLOG(...) [CXLog write:__VA_ARGS__]
 
 @interface CXLog : NSObject
@@ -25,6 +25,7 @@
 @property (nonatomic, assign) BOOL bankEnabled;    // 题库优先
 @property (nonatomic, copy) NSString *bankURL;
 @property (nonatomic, copy) NSString *bankToken;
+@property (nonatomic, copy) NSString *bankJSON;   // OCS 题库配置（JSON 数组）
 + (instancetype)shared;
 - (void)reload;
 - (void)save;

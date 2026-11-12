@@ -3,6 +3,7 @@
 #import "CXHUD.h"
 #import "CXHistory.h"
 #import "CXBank.h"
+#import <UIKit/UIKit.h>
 
 static NSString *const kSystemPrompt =
 @"你是中国高校在线考试的答题引擎。只输出一个 JSON 对象，不输出解释、不输出 Markdown 代码块。\n"
@@ -96,13 +97,13 @@ static NSString *const kSystemPrompt =
     NSString *stem = question[@"stem"];
     if (stem.length < 2) return;
     __weak typeof(self) weakSelf = self;
-    [CXBank query:stem type:question[@"type"] ?: @"single" completion:^(NSDictionary *bankAns) {
+    [CXBank query:stem type:question[@"type"] ?: @"single" options:question[@"opts"] ?: @[] completion:^(NSDictionary *bankAns) {
         CXAI *strongSelf = weakSelf;
         if (!strongSelf) return;
         if (bankAns && ([(NSArray *)bankAns[@"answer"] count] || [(NSString *)bankAns[@"text"] length])) {
             CXLOG(@"题库命中 %@", bankAns);
             dispatch_async(dispatch_get_main_queue(), ^{
-                [[CXHUD shared] showAnswer:bankAns question:stem];
+                [[CXHUD shared] showAnswer:bankAns question:stem source:@"题库"];
                 [strongSelf fill:bankAns question:question webView:webView frame:frame];
                 [[CXHistory shared] addStem:stem type:question[@"type"] ?: @"" answer:bankAns[@"answer"] ?: @[] text:bankAns[@"text"] ?: @""];
             });
@@ -122,7 +123,7 @@ static NSString *const kSystemPrompt =
     if (cached) {
         CXLOG(@"命中缓存，直接回填");
         dispatch_async(dispatch_get_main_queue(), ^{
-            [[CXHUD shared] showAnswer:cached question:stem];
+            [[CXHUD shared] showAnswer:cached question:stem source:@"缓存"];
             [self fill:cached question:question webView:webView frame:frame];
         });
         return;
@@ -175,8 +176,13 @@ static NSString *const kSystemPrompt =
         if (!url) continue;
         dispatch_group_enter(group);
         [[self.session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-            if (data.length > 1000 && data.length < 4 * 1024 * 1024) {
-                NSString *b64 = [data base64EncodedStringWithOptions:0];
+            NSData *use = data;
+            if (use.length > 700 * 1024 || [self imageTooLarge:use]) {
+                NSData *small = [self shrinkImage:use maxSide:1024 quality:0.8];
+                if (small.length) use = small;
+            }
+            if (use.length > 1000 && use.length < 4 * 1024 * 1024) {
+                NSString *b64 = [use base64EncodedStringWithOptions:0];
                 [lock lock];
                 if (out.count < 3) [out addObject:b64];
                 [lock unlock];
@@ -185,6 +191,24 @@ static NSString *const kSystemPrompt =
         }] resume];
     }
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{ done([out copy]); });
+}
+
+- (BOOL)imageTooLarge:(NSData *)data {
+    UIImage *img = [UIImage imageWithData:data];
+    return img && (img.size.width > 1400 || img.size.height > 1400);
+}
+
+- (NSData *)shrinkImage:(NSData *)data maxSide:(CGFloat)maxSide quality:(CGFloat)quality {
+    UIImage *img = [UIImage imageWithData:data];
+    if (!img) return nil;
+    CGFloat w = img.size.width, h = img.size.height;
+    CGFloat scale = MIN(1.0, maxSide / MAX(w, h));
+    CGSize size = CGSizeMake(w * scale, h * scale);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 1.0);
+    [img drawInRect:CGRectMake(0, 0, size.width, size.height)];
+    UIImage *out = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return UIImageJPEGRepresentation(out, quality);
 }
 
 - (NSArray *)messagesWithPayload:(NSDictionary *)payload images:(NSArray<NSString *> *)images {
@@ -200,7 +224,8 @@ static NSString *const kSystemPrompt =
     for (NSString *b64 in images) {
         NSString *mime = [b64 hasPrefix:@"iVBOR"] ? @"image/png" : @"image/jpeg";
         NSString *dataURL = [NSString stringWithFormat:@"data:%@;base64,%@", mime, b64];
-        [parts addObject:@{@"type": @"image_url", @"image_url": @{@"url": dataURL}}];
+        [parts addObject:@{@"type": @"image_url",
+                           @"image_url": @{@"url": dataURL, @"detail": @"low"}}];
     }
     [msgs addObject:@{@"role": @"user", @"content": parts}];
     return msgs;
@@ -218,7 +243,7 @@ static NSString *const kSystemPrompt =
     NSDictionary *body = @{@"model": [CXConfig shared].model ?: @"deepseek-chat",
                            @"messages": messages,
                            @"temperature": @0.1,
-                           @"max_tokens": @4096,
+                           @"max_tokens": @8192,
                            @"stream": @NO};
     NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
@@ -296,7 +321,7 @@ static NSString *const kSystemPrompt =
                                text:ans[@"text"] ?: @""];
         if ([ans[@"answer"] count]) strongSelf.cache[key] = ans;
         dispatch_async(dispatch_get_main_queue(), ^{
-            [[CXHUD shared] showAnswer:ans question:question[@"stem"]];
+            [[CXHUD shared] showAnswer:ans question:question[@"stem"] source:@"大模型"];
             [strongSelf fill:ans question:question webView:weakWV frame:frame];
             @synchronized (strongSelf.inflight) { [strongSelf.inflight removeObject:key]; }
         });

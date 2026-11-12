@@ -2,6 +2,7 @@
 #import "CXCommon.h"
 #import "CXAI.h"
 #import "CXHistory.h"
+#import "CXBank.h"
 
 #pragma mark - 窗口
 
@@ -71,6 +72,8 @@
     UITextField *_base, *_model, *_key;
     UISwitch *_auto, *_guard, *_hud, *_vision, *_bankOn;
     UITextField *_bankURL, *_bankToken;
+    UITextView *_bankJSONView;
+    NSLayoutConstraint *_historyHeight;
     UISlider *_delay;
     UILabel *_delayLabel;
     UILabel *_testLabel;
@@ -164,14 +167,24 @@
 
     _bankOn = [UISwitch new];
     _bankOn.on = c.bankEnabled;
-    _bankURL = [self field:@"题库接口地址（OCS 风格 GET）" value:c.bankURL];
-    _bankToken = [self field:@"题库 Token（可选）" value:c.bankToken];
+    _bankURL = [self field:@"简单模式地址（GET ?question=&type=&token=）" value:c.bankURL];
+    _bankToken = [self field:@"简单模式 Token（可选）" value:c.bankToken];
+
+    _bankJSONView = [UITextView new];
+    _bankJSONView.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    _bankJSONView.layer.cornerRadius = 10;
+    _bankJSONView.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
+    _bankJSONView.textContainerInset = UIEdgeInsetsMake(8, 8, 8, 8);
+    _bankJSONView.text = c.bankJSON;
+    [_bankJSONView.heightAnchor constraintEqualToConstant:130].active = YES;
 
     for (UIView *v in @[_base, _model, _key,
                         [self button:@"测试接口连通" action:@selector(testAPI)],
                         _testLabel,
-                        [self label:@"题库（优先于 AI）"],
+                        [self label:@"题库（优先于 AI）：把 OCS 的题库 JSON 数组粘到下面即可"],
                         [self row:@"启用题库" control:_bankOn],
+                        _bankJSONView,
+                        [self button:@"检测题库连通" action:@selector(testBank)],
                         _bankURL, _bankToken,
                         [self label:@"请求格式：GET {地址}?question=题干&type=0/1/2/3&token=xxx；未命中自动转 AI。图片识别会按视觉格式发送 base64，接口不支持时降级纯文本。"]] ) {
         [_modelStack addArrangedSubview:v];
@@ -213,7 +226,8 @@
     _historyTable.delegate = self;
     _historyTable.rowHeight = 88;
     _historyTable.layer.cornerRadius = 10;
-    [_historyTable.heightAnchor constraintEqualToConstant:380].active = YES;
+    _historyHeight = [_historyTable.heightAnchor constraintEqualToConstant:380];
+    _historyHeight.active = YES;
 
     for (UIView *v in @[[self label:@"最近 100 条作答记录，点击可复制。"],
                         _historyTable,
@@ -276,6 +290,12 @@
     row.alignment = UIStackViewAlignmentCenter;
     row.spacing = 12;
     return row;
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGFloat h = self.view.bounds.size.height - 300;
+    _historyHeight.constant = MAX(240, h);
 }
 
 - (void)segmentChanged {
@@ -371,6 +391,13 @@
     [self refreshLog];
 }
 
+- (void)testBank {
+    _testLabel.text = @"题库测试中…";
+    [CXBank testBank:^(BOOL ok, NSString *msg) {
+        self->_testLabel.text = [NSString stringWithFormat:@"题库%@ %@", ok ? @"成功" : @"失败", msg ?: @""];
+    }];
+}
+
 - (void)resetPanelPos {
     [[CXHUD shared] resetPanelPosition];
 }
@@ -387,6 +414,7 @@
     c.bankEnabled = _bankOn.isOn;
     c.bankURL = _bankURL.text ?: @"";
     c.bankToken = _bankToken.text ?: @"";
+    c.bankJSON = _bankJSONView.text ?: @"";
     c.startDelay = _delay.value;
     [c save];
     CXLOG(@"设置已保存 model=%@ keyLen=%lu vision=%d", c.model, (unsigned long)c.apiKey.length, c.visionEnabled);
@@ -439,6 +467,7 @@
     UIView *_ball;
     UILabel *_ballLabel;
     UIVisualEffectView *_panel;
+    UILabel *_titleLabel;
     UILabel *_qLabel;
     UILabel *_bigLabel;
     UILabel *_aTextLabel;
@@ -522,10 +551,10 @@
     _panel.translatesAutoresizingMaskIntoConstraints = NO;
     [host addSubview:_panel];
 
-    UILabel *title = [[UILabel alloc] init];
-    title.text = @"CXExamAI";
-    title.textColor = [UIColor colorWithWhite:1 alpha:0.55];
-    title.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+    _titleLabel = [[UILabel alloc] init];
+    _titleLabel.text = @"CXExamAI";
+    _titleLabel.textColor = [UIColor colorWithWhite:1 alpha:0.55];
+    _titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
 
     _hintLabel = [[UILabel alloc] init];
     _hintLabel.textColor = [UIColor colorWithWhite:1 alpha:0.55];
@@ -534,7 +563,7 @@
     _hintLabel.text = @"待机 · 双击重答 · 长按设置";
     _hintLabel.textAlignment = NSTextAlignmentRight;
 
-    UIStackView *head = [[UIStackView alloc] initWithArrangedSubviews:@[title, _hintLabel]];
+    UIStackView *head = [[UIStackView alloc] initWithArrangedSubviews:@[_titleLabel, _hintLabel]];
     head.axis = UILayoutConstraintAxisHorizontal;
     head.distribution = UIStackViewDistributionEqualSpacing;
     head.alignment = UIStackViewAlignmentCenter;
@@ -761,10 +790,11 @@
     });
 }
 
-- (void)showAnswer:(NSDictionary *)ans question:(NSString *)stem {
+- (void)showAnswer:(NSDictionary *)ans question:(NSString *)stem source:(NSString *)source {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSArray *letters = ans[@"answer"] ?: @[];
         NSString *text = ans[@"text"] ?: @"";
+        self->_titleLabel.text = [NSString stringWithFormat:@"CXExamAI · %@", source ?: @""];
         self->_qLabel.text = stem.length ? stem : @"（未取到题干）";
         self->_bigLabel.text = letters.count ? [letters componentsJoinedByString:@" "] : @"";
         self->_aTextLabel.text = text.length ? text : (letters.count ? @"" : @"（空答案）");

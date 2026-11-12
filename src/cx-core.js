@@ -513,6 +513,41 @@
     }, 220);
   }
 
+  // 点击全部失败时的兜底：直接写 answers 隐藏域并加选中样式
+  function forceSelect(el, letter, type) {
+    try {
+      var box = null;
+      try { box = el.closest ? el.closest('.answerMain') : null; } catch (e) {}
+      var tv = '';
+      if (box) {
+        var tn = box.querySelector('input[name^="typeName"]');
+        tv = tn ? (tn.value || '') : '';
+      }
+      var multi = /多选|不定项/.test(tv) || type === 'multi';
+      var qid = box ? (box.getAttribute('data') || '') : '';
+      var inp = null;
+      if (qid) inp = document.querySelector('input[name="answers' + qid + '"]');
+      if (!inp && box) inp = box.querySelector('input[name^="answers"]');
+      if (!inp) inp = document.querySelector('input[name^="answers"]');
+      if (!inp) { post('log', 'force no input'); return false; }
+      var cur = inp.value || '';
+      var parts = cur ? cur.split(/[,\s|#]+/).filter(Boolean) : [];
+      if (multi) {
+        if (parts.indexOf(letter) < 0) parts.push(letter);
+        parts.sort();
+      } else {
+        parts = [letter];
+      }
+      inp.value = parts.join(',');
+      try { inp.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+      try { inp.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+      try { el.classList.add('cur'); } catch (e) {}
+      try { var no = el.querySelector('.No'); if (no) no.style.color = '#fff'; } catch (e) {}
+      post('log', 'force ' + letter + ' answers=' + inp.value);
+      return true;
+    } catch (e) { post('log', 'force err ' + e); return false; }
+  }
+
   function setValue(el, val) {
     try {
       var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -585,7 +620,7 @@
       for (i = 0; i < letters.length; i++) {
         var L = String(letters[i]).toUpperCase();
         var it = findItem(q.node, L);
-        if (it) elems.push(it);
+        if (it) elems.push({ el: it, letter: L });
         else post('log', 'item miss ' + L);
       }
     }
@@ -594,8 +629,9 @@
     var n = 0;
     function step() {
       if (n >= elems.length) { post('filled', idx); return; }
-      var el = elems[n++];
-      selectItem(el, function (ok) {
+      var item = elems[n++];
+      selectItem(item.el, function (ok) {
+        if (!ok) forceSelect(item.el, item.letter, q.type);
         post('log', 'sel ' + (ok ? 'ok' : 'fail'));
         setTimeout(step, 120);
       });
