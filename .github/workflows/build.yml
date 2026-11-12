@@ -1,0 +1,41 @@
+name: build-dylib
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 生成 JS 头文件
+        run: |
+          xxd -i src/cx-core.js | sed 's/src_cx_core_js/cx_core_js/g' > src/cx-core.js.h
+          head -3 src/cx-core.js.h
+
+      - name: 编译 dylib
+        run: |
+          xcrun --sdk iphoneos clang -arch arm64 -dynamiclib -O2 \
+            -miphoneos-version-min=15.0 -fobjc-arc -Isrc \
+            -framework Foundation -framework UIKit -framework WebKit \
+            -framework QuartzCore \
+            -install_name @executable_path/Frameworks/CXExamAI.dylib \
+            -o CXExamAI.dylib src/*.m
+          ls -lh CXExamAI.dylib
+          file CXExamAI.dylib
+
+      - name: 签名
+        run: |
+          brew install ldid >/dev/null 2>&1 || true
+          ldid -S CXExamAI.dylib || echo "ldid 失败，TrollFools 注入时会重新签名"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: CXExamAI-dylib
+          path: CXExamAI.dylib
+          if-no-files-found: error

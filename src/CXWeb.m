@@ -1,0 +1,184 @@
+#import "CXWeb.h"
+#import "CXCommon.h"
+#import "CXHook.h"
+#import "CXAI.h"
+#import "CXHUD.h"
+#import <WebKit/WebKit.h>
+#import <objc/runtime.h>
+
+// xxd -i 生成
+extern unsigned char cx_core_js[];
+extern unsigned int cx_core_js_len;
+
+static NSHashTable *gWebViews;
+static NSHashTable *gExamWebViews;
+static NSMutableSet *gAnswered;
+static char kInstalledKey;
+
+@interface CXWeb (Install)
++ (void)installIntoConfiguration:(WKWebViewConfiguration *)cfg;
+@end
+
+#pragma mark - 消息处理
+
+@interface CXMessageHandler : NSObject <WKScriptMessageHandler>
+@end
+
+@implementation CXMessageHandler
+
+- (void)userContentController:(WKUserContentController *)ucc didReceiveScriptMessage:(WKScriptMessage *)message {
+    id body = message.body;
+    if (![body isKindOfClass:[NSDictionary class]]) return;
+    NSString *type = body[@"t"];
+    WKWebView *wv = message.webView;
+    if (![type isKindOfClass:[NSString class]]) return;
+
+    if ([type isEqualToString:@"exam"]) {
+        BOOL isExam = [body[@"d"] boolValue];
+        if (wv && isExam) {
+            @synchronized (gExamWebViews) { [gExamWebViews addObject:wv]; }
+        }
+        CXLOG(@"页面: exam=%@ url=%@", isExam ? @"YES" : @"NO", body[@"u"]);
+        return;
+    }
+
+    if ([type isEqualToString:@"log"]) {
+        CXLOG(@"[js] %@", body[@"d"]);
+        return;
+    }
+
+    if ([type isEqualToString:@"q"]) {
+        NSArray *list = body[@"d"];
+        if (![list isKindOfClass:[NSArray class]] || list.count == 0) return;
+        CXLOG(@"捕获 %lu 题 url=%@", (unsigned long)list.count, body[@"u"]);
+
+        CXConfig *cfg = [CXConfig shared];
+        if (cfg.apiKey.length == 0) {
+            [[CXHUD shared] setStatus:@"缺Key"];
+            return;
+        }
+        if (!cfg.autoAnswer) {
+            [[CXHUD shared] setStatus:@"待触发"];
+            return;
+        }
+
+        NSInteger i = 0;
+        for (NSDictionary *q in list) {
+            if (![q isKindOfClass:[NSDictionary class]]) continue;
+            NSString *stem = q[@"stem"];
+            if (stem.length < 2) continue;
+            NSString *key = [NSString stringWithFormat:@"%lu", (unsigned long)[stem hash]];
+            @synchronized (gAnswered) {
+                if ([gAnswered containsObject:key]) continue;
+                [gAnswered addObject:key];
+            }
+            double delay = cfg.startDelay + i * cfg.gapDelay;
+            i++;
+            __weak WKWebView *weakWV = wv;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [[CXAI shared] solve:q inWebView:weakWV];
+            });
+        }
+        [[CXHUD shared] setStatus:@"作答中"];
+        return;
+    }
+
+    if ([type isEqualToString:@"filled"]) {
+        [[CXHUD shared] setStatus:@"已填答"];
+        return;
+    }
+
+    if ([type isEqualToString:@"dom"]) {
+        NSString *html = body[@"d"];
+        if (![html isKindOfClass:[NSString class]] || html.length == 0) return;
+        NSString *dir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+        NSString *name = [NSString stringWithFormat:@"cx-dom-%ld.html", (long)[[NSDate date] timeIntervalSince1970]];
+        NSString *path = [dir stringByAppendingPathComponent:name];
+        [html writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        CXLOG(@"DOM 已保存 %@ (%lu bytes)", path, (unsigned long)html.length);
+        [[CXHUD shared] setStatus:@"已存DOM"];
+    }
+}
+
+@end
+
+#pragma mark - CXWeb
+
+@implementation CXWeb
+
++ (void)start {
+    gWebViews = [NSHashTable weakObjectsHashTable];
+    gExamWebViews = [NSHashTable weakObjectsHashTable];
+    gAnswered = [NSMutableSet set];
+
+    BOOL a = CXSwizzleInstance([WKWebView class],
+                               @selector(initWithFrame:configuration:),
+                               @selector(cx_initWithFrame:configuration:));
+    BOOL b = CXSwizzleInstance([WKWebView class],
+                               @selector(initWithCoder:),
+                               @selector(cx_initWithCoder:));
+    CXLOG(@"WKWebView hook init=%@ coder=%@", a ? @"ok" : @"miss", b ? @"ok" : @"miss");
+}
+
++ (void)installIntoConfiguration:(WKWebViewConfiguration *)cfg {
+    if (!cfg) return;
+    WKUserContentController *ucc = cfg.userContentController;
+    if (!ucc) {
+        ucc = [WKUserContentController new];
+        cfg.userContentController = ucc;
+    }
+    if (objc_getAssociatedObject(ucc, &kInstalledKey)) return;
+    objc_setAssociatedObject(ucc, &kInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    [ucc addScriptMessageHandler:[CXMessageHandler new] name:@"cxNative"];
+
+    NSString *js = [[NSString alloc] initWithBytes:cx_core_js
+                                            length:cx_core_js_len
+                                          encoding:NSUTF8StringEncoding];
+    if (js.length == 0) {
+        CXLOG(@"JS 资源为空，注入失败");
+        return;
+    }
+    WKUserScript *script = [[WKUserScript alloc] initWithSource:js
+                                                 injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                              forMainFrameOnly:NO];
+    [ucc addUserScript:script];
+    CXLOG(@"已安装注入脚本 %lu bytes", (unsigned long)js.length);
+}
+
++ (void)manualTrigger {
+    NSArray *list = nil;
+    @synchronized (gExamWebViews) { list = gExamWebViews.allObjects; }
+    if (list.count == 0) {
+        @synchronized (gWebViews) { list = gWebViews.allObjects; }
+    }
+    for (WKWebView *wv in list) {
+        [wv evaluateJavaScript:@"window.__cxGrab&&window.__cxGrab(true)" completionHandler:nil];
+    }
+    [[CXHUD shared] setStatus:@"已触发"];
+}
+
+@end
+
+#pragma mark - WKWebView 分类
+
+@implementation WKWebView (CX)
+
+- (instancetype)cx_initWithFrame:(CGRect)frame configuration:(WKWebViewConfiguration *)configuration {
+    if (!configuration) configuration = [WKWebViewConfiguration new];
+    [CXWeb installIntoConfiguration:configuration];
+    id v = [self cx_initWithFrame:frame configuration:configuration];
+    if (v) @synchronized (gWebViews) { [gWebViews addObject:v]; }
+    return v;
+}
+
+- (instancetype)cx_initWithCoder:(NSCoder *)coder {
+    id v = [self cx_initWithCoder:coder];
+    if (v) {
+        if (self.configuration) [CXWeb installIntoConfiguration:self.configuration];
+        @synchronized (gWebViews) { [gWebViews addObject:self]; }
+    }
+    return v;
+}
+
+@end
