@@ -68,12 +68,15 @@ static char kInstalledKey;
         }
 
         WKFrameInfo *frame = message.frameInfo;
+        NSString *pageURL = body[@"u"] ?: @"";
         NSInteger i = 0;
         for (NSDictionary *q in list) {
             if (![q isKindOfClass:[NSDictionary class]]) continue;
             NSString *stem = q[@"stem"];
             if (stem.length < 2) continue;
-            NSString *key = [NSString stringWithFormat:@"%lu", (unsigned long)[stem hash]];
+            // 同一题在不同页面（上一题/下一题）算不同的 key，允许回去重答
+            NSString *key = [NSString stringWithFormat:@"%lu-%lu",
+                             (unsigned long)[stem hash], (unsigned long)[pageURL hash]];
             @synchronized (gAnswered) {
                 NSNumber *ts = gAnswered[key];
                 NSTimeInterval now = [NSDate date].timeIntervalSince1970;
