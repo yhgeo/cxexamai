@@ -62,6 +62,7 @@ static char kInstalledKey;
             return;
         }
 
+        WKFrameInfo *frame = message.frameInfo;
         NSInteger i = 0;
         for (NSDictionary *q in list) {
             if (![q isKindOfClass:[NSDictionary class]]) continue;
@@ -76,7 +77,7 @@ static char kInstalledKey;
             i++;
             __weak WKWebView *weakWV = wv;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [[CXAI shared] solve:q inWebView:weakWV];
+                [[CXAI shared] solve:q inWebView:weakWV frame:frame];
             });
         }
         [[CXHUD shared] setStatus:@"作答中"];

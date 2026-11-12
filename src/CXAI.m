@@ -45,7 +45,7 @@ static NSString *const kSystemPrompt =
     return [NSString stringWithFormat:@"%lu-%@", (unsigned long)[stem hash], idx];
 }
 
-- (void)solve:(NSDictionary *)question inWebView:(WKWebView *)webView {
+- (void)solve:(NSDictionary *)question inWebView:(WKWebView *)webView frame:(WKFrameInfo *)frame {
     if (![question isKindOfClass:[NSDictionary class]]) return;
     NSString *stem = question[@"stem"];
     if (stem.length < 2) return;
@@ -126,7 +126,7 @@ static NSString *const kSystemPrompt =
         CXLOG(@"模型答案 %@", ans);
         dispatch_async(dispatch_get_main_queue(), ^{
             [[CXHUD shared] showAnswer:ans question:stem];
-            [strongSelf fill:ans question:question webView:weakWV];
+            [strongSelf fill:ans question:question webView:weakWV frame:frame];
             @synchronized (strongSelf.inflight) { [strongSelf.inflight removeObject:key]; }
         });
     }];
@@ -176,7 +176,7 @@ static NSString *const kSystemPrompt =
     return @{@"answer": @[], @"text": s};
 }
 
-- (void)fill:(NSDictionary *)ans question:(NSDictionary *)q webView:(WKWebView *)wv {
+- (void)fill:(NSDictionary *)ans question:(NSDictionary *)q webView:(WKWebView *)wv frame:(WKFrameInfo *)frame {
     if (!wv) return;
     NSNumber *idx = q[@"idx"] ?: @0;
     NSData *ld = [NSJSONSerialization dataWithJSONObject:ans[@"answer"] ?: @[] options:0 error:nil];
@@ -188,11 +188,16 @@ static NSString *const kSystemPrompt =
                     [[NSString alloc] initWithData:td encoding:NSUTF8StringEncoding],
                     h];
     dispatch_async(dispatch_get_main_queue(), ^{
-        [wv evaluateJavaScript:js completionHandler:^(id r, NSError *e) {
+        void (^done)(id, NSError *) = ^(id r, NSError *e) {
             if (e) CXLOG(@"回填失败 %@", e.localizedDescription);
             else CXLOG(@"回填完成 #%@", idx);
             [[CXHUD shared] setStatus:@"已填答"];
-        }];
+        };
+        if (frame) {
+            [wv evaluateJavaScript:js inFrame:frame inContentWorld:WKContentWorld.pageWorld completionHandler:done];
+        } else {
+            [wv evaluateJavaScript:js completionHandler:done];
+        }
     });
 }
 
