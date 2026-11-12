@@ -1,6 +1,7 @@
 #import "CXAI.h"
 #import "CXCommon.h"
 #import "CXHUD.h"
+#import "CXHistory.h"
 
 static NSString *const kSystemPrompt =
 @"你是中国高校在线考试的答题引擎。只输出一个 JSON 对象，不输出解释、不输出 Markdown 代码块。\n"
@@ -261,6 +262,10 @@ static NSString *const kSystemPrompt =
 
         NSDictionary *ans = [strongSelf parseAnswer:content];
         CXLOG(@"答案 %@", ans);
+        [[CXHistory shared] addStem:question[@"stem"] ?: @""
+                               type:payload[@"type"] ?: @""
+                             answer:ans[@"answer"] ?: @[]
+                               text:ans[@"text"] ?: @""];
         if ([ans[@"answer"] count]) strongSelf.cache[key] = ans;
         dispatch_async(dispatch_get_main_queue(), ^{
             [[CXHUD shared] showAnswer:ans question:question[@"stem"]];

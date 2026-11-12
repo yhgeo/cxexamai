@@ -1,6 +1,7 @@
 #import "CXHUD.h"
 #import "CXCommon.h"
 #import "CXAI.h"
+#import "CXHistory.h"
 
 #pragma mark - 窗口
 
@@ -17,18 +18,24 @@
 
 #pragma mark - 设置页
 
-@interface CXSettingsViewController : UIViewController
+@interface CXSettingsViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
 @end
 
 @implementation CXSettingsViewController {
+    UISegmentedControl *_segment;
+    UIStackView *_baseStack, *_modelStack, *_logStack, *_historyStack;
+
     UITextField *_base, *_model, *_key;
-    UISwitch *_auto, *_guard, *_hud;
+    UISwitch *_auto, *_guard, *_hud, *_vision;
     UISlider *_delay;
     UILabel *_delayLabel;
     UILabel *_testLabel;
+
     UITextView *_logView;
     UILabel *_sizeLabel;
-    UISwitch *_vision;
+
+    UITableView *_historyTable;
+    NSArray *_historyItems;
 }
 
 - (void)viewDidLoad {
@@ -40,28 +47,43 @@
                                         target:self action:@selector(save)];
 
     CXConfig *c = [CXConfig shared];
-    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:self.view.bounds];
-    scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+
+    _segment = [[UISegmentedControl alloc] initWithItems:@[@"基础", @"模型", @"日志", @"历史"]];
+    _segment.selectedSegmentIndex = 0;
+    [_segment addTarget:self action:@selector(segmentChanged) forControlEvents:UIControlEventValueChanged];
+    _segment.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:_segment];
+
+    UIScrollView *scroll = [[UIScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
     [self.view addSubview:scroll];
 
-    UIStackView *stack = [[UIStackView alloc] init];
-    stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 12;
-    stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [scroll addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
-        [stack.topAnchor constraintEqualToAnchor:scroll.topAnchor constant:20],
-        [stack.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor constant:20],
-        [stack.trailingAnchor constraintEqualToAnchor:scroll.trailingAnchor constant:-20],
-        [stack.widthAnchor constraintEqualToAnchor:scroll.widthAnchor constant:-40],
-        [stack.bottomAnchor constraintEqualToAnchor:scroll.bottomAnchor constant:-40],
+        [_segment.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:10],
+        [_segment.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
+        [_segment.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
+        [scroll.topAnchor constraintEqualToAnchor:_segment.bottomAnchor constant:10],
+        [scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
     ]];
 
-    _base = [self field:@"接口地址，如 https://api.deepseek.com" value:c.baseURL];
-    _model = [self field:@"模型，如 deepseek-chat" value:c.model];
-    _key = [self field:@"API Key" value:c.apiKey];
-    _key.secureTextEntry = YES;
+    UIStackView *root = [[UIStackView alloc] init];
+    root.axis = UILayoutConstraintAxisVertical;
+    root.spacing = 0;
+    root.translatesAutoresizingMaskIntoConstraints = NO;
+    [scroll addSubview:root];
+    [NSLayoutConstraint activateConstraints:@[
+        [root.topAnchor constraintEqualToAnchor:scroll.topAnchor],
+        [root.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor constant:20],
+        [root.trailingAnchor constraintEqualToAnchor:scroll.trailingAnchor constant:-20],
+        [root.widthAnchor constraintEqualToAnchor:scroll.widthAnchor constant:-40],
+        [root.bottomAnchor constraintEqualToAnchor:scroll.bottomAnchor constant:-40],
+    ]];
 
+    // ---------- 基础 ----------
+    _baseStack = [self columnStack];
     _auto = [UISwitch new]; _auto.on = c.autoAnswer;
     _guard = [UISwitch new]; _guard.on = c.guardEnabled;
     _hud = [UISwitch new]; _hud.on = c.hudEnabled;
@@ -74,12 +96,40 @@
     _delay.minimumValue = 0; _delay.maximumValue = 5; _delay.value = c.startDelay;
     [_delay addTarget:self action:@selector(delayChanged) forControlEvents:UIControlEventValueChanged];
 
-    UIButton *test = [self button:@"测试接口连通" action:@selector(testAPI)];
+    for (UIView *v in @[[self row:@"自动答题" control:_auto],
+                        [self row:@"考试页防检测" control:_guard],
+                        [self row:@"显示悬浮球" control:_hud],
+                        [self row:@"识别题目图片（需视觉模型）" control:_vision],
+                        _delayLabel, _delay,
+                        [self button:@"重置悬浮窗位置与缩放" action:@selector(resetPanelPos)],
+                        [self label:@"面板可拖动、可双指缩放，超出屏幕会自动回弹。"]] ) {
+        [_baseStack addArrangedSubview:v];
+    }
+
+    // ---------- 模型 ----------
+    _modelStack = [self columnStack];
+    _base = [self field:@"接口地址，如 https://api.deepseek.com" value:c.baseURL];
+    _model = [self field:@"模型名称（填接口实际支持的名称）" value:c.model];
+    _key = [self field:@"API Key" value:c.apiKey];
+    _key.secureTextEntry = YES;
 
     _testLabel = [UILabel new];
     _testLabel.font = [UIFont systemFontOfSize:13];
     _testLabel.textColor = [UIColor secondaryLabelColor];
     _testLabel.numberOfLines = 0;
+
+    for (UIView *v in @[_base, _model, _key,
+                        [self button:@"测试接口连通" action:@selector(testAPI)],
+                        _testLabel,
+                        [self label:@"图片识别会按 OpenAI 视觉格式发送 base64 图片；接口不支持时自动降级为纯文本。"]] ) {
+        [_modelStack addArrangedSubview:v];
+    }
+
+    // ---------- 日志 ----------
+    _logStack = [self columnStack];
+    _sizeLabel = [UILabel new];
+    _sizeLabel.font = [UIFont systemFontOfSize:12];
+    _sizeLabel.textColor = [UIColor secondaryLabelColor];
 
     _logView = [UITextView new];
     _logView.editable = NO;
@@ -87,26 +137,8 @@
     _logView.backgroundColor = [UIColor secondarySystemBackgroundColor];
     _logView.layer.cornerRadius = 10;
     _logView.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
-    _logView.textColor = [UIColor labelColor];
     _logView.textContainerInset = UIEdgeInsetsMake(8, 8, 8, 8);
-    [_logView.heightAnchor constraintEqualToConstant:220].active = YES;
-    _logView.text = [CXLog tail:60];
-
-    UIButton *refresh = [self button:@"刷新日志" action:@selector(refreshLog)];
-    UIButton *share = [self button:@"导出日志 + DOM 快照" action:@selector(shareLog)];
-    UIButton *clean = [self button:@"清理日志与 DOM" action:@selector(cleanupFiles)];
-    UIButton *resetPanel = [self button:@"重置悬浮窗位置" action:@selector(resetPanelPos)];
-
-    _sizeLabel = [UILabel new];
-    _sizeLabel.font = [UIFont systemFontOfSize:12];
-    _sizeLabel.textColor = [UIColor secondaryLabelColor];
-    _sizeLabel.numberOfLines = 1;
-    _sizeLabel.text = @"";
-
-    UILabel *logTitle = [UILabel new];
-    logTitle.text = @"最近日志（60 行）";
-    logTitle.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
-    logTitle.textColor = [UIColor secondaryLabelColor];
+    [_logView.heightAnchor constraintEqualToConstant:260].active = YES;
 
     UILabel *pathLabel = [UILabel new];
     pathLabel.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
@@ -114,52 +146,49 @@
     pathLabel.numberOfLines = 2;
     pathLabel.text = [CXLog path];
 
-    UILabel *tip = [UILabel new];
-    tip.font = [UIFont systemFontOfSize:12];
-    tip.textColor = [UIColor secondaryLabelColor];
-    tip.numberOfLines = 0;
-    tip.text = @"单击悬浮球展开答案，双击立即重答，长按打开本页。\n面板可按住拖动，位置会自动记住。\n模型名填你的接口实际支持的名称，接口换模型后同步改这里。";
-
-    NSArray *views = @[_base, _model, _key,
-                       [self rowWithTitle:@"自动答题" control:_auto],
-                       [self rowWithTitle:@"考试页防检测" control:_guard],
-                       [self rowWithTitle:@"显示悬浮球" control:_hud],
-                       [self rowWithTitle:@"识别题目图片（需视觉模型）" control:_vision],
-                       _delayLabel, _delay, test, _testLabel,
-                       logTitle, _sizeLabel, _logView, refresh, clean, share, resetPanel, pathLabel, tip];
-    for (UIView *v in views) [stack addArrangedSubview:v];
-}
-
-- (void)viewWillAppear:(BOOL)animated {
-    [super viewWillAppear:animated];
-    [self refreshLog];
-}
-
-- (void)refreshLog {
-    _logView.text = [CXLog tail:60];
-    [_logView setContentOffset:CGPointZero animated:NO];
-    unsigned long long sz = [CXLog logSize];
-    NSInteger domCount = 0;
-    unsigned long long domSize = 0;
-    NSString *dir = [[CXLog path] stringByDeletingLastPathComponent];
-    for (NSString *f in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:nil]) {
-        if ([f hasPrefix:@"cx-dom-"] && [f hasSuffix:@".html"]) {
-            domCount++;
-            NSDictionary *a = [[NSFileManager defaultManager] attributesOfItemAtPath:[dir stringByAppendingPathComponent:f] error:nil];
-            domSize += a ? [a fileSize] : 0;
-        }
+    for (UIView *v in @[_sizeLabel,
+                        [self button:@"刷新日志" action:@selector(refreshLog)],
+                        [self button:@"清理日志与 DOM" action:@selector(cleanupFiles)],
+                        [self button:@"导出日志 + DOM 快照" action:@selector(shareLog)],
+                        _logView, pathLabel]) {
+        [_logStack addArrangedSubview:v];
     }
-    _sizeLabel.text = [NSString stringWithFormat:@"日志 %.1f KB · DOM %ld 个 %.1f MB（自动保留最近 3 个）",
-                       sz / 1024.0, (long)domCount, domSize / 1048576.0];
+
+    // ---------- 历史 ----------
+    _historyStack = [self columnStack];
+    _historyTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    _historyTable.dataSource = self;
+    _historyTable.delegate = self;
+    _historyTable.rowHeight = 66;
+    _historyTable.layer.cornerRadius = 10;
+    [_historyTable.heightAnchor constraintEqualToConstant:380].active = YES;
+
+    for (UIView *v in @[[self label:@"最近 100 条作答记录，点击可复制。"],
+                        _historyTable,
+                        [self button:@"清空历史" action:@selector(clearHistory)]]) {
+        [_historyStack addArrangedSubview:v];
+    }
+
+    for (UIView *v in @[_baseStack, _modelStack, _logStack, _historyStack]) [root addArrangedSubview:v];
+    [self segmentChanged];
 }
 
-- (void)cleanupFiles {
-    [CXLog cleanupAll];
-    [self refreshLog];
+- (UIStackView *)columnStack {
+    UIStackView *s = [[UIStackView alloc] init];
+    s.axis = UILayoutConstraintAxisVertical;
+    s.spacing = 12;
+    s.layoutMargins = UIEdgeInsetsMake(8, 0, 20, 0);
+    s.layoutMarginsRelativeArrangement = YES;
+    return s;
 }
 
-- (void)resetPanelPos {
-    [[CXHUD shared] resetPanelPosition];
+- (UILabel *)label:(NSString *)text {
+    UILabel *l = [UILabel new];
+    l.text = text;
+    l.font = [UIFont systemFontOfSize:12];
+    l.textColor = [UIColor secondaryLabelColor];
+    l.numberOfLines = 0;
+    return l;
 }
 
 - (UIButton *)button:(NSString *)title action:(SEL)action {
@@ -185,38 +214,123 @@
     return t;
 }
 
-- (UIView *)rowWithTitle:(NSString *)title control:(UIView *)control {
+- (UIView *)row:(NSString *)title control:(UIView *)control {
     UILabel *l = [UILabel new];
     l.text = title;
     l.font = [UIFont systemFontOfSize:14];
+    l.numberOfLines = 2;
     UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[l, control]];
     row.axis = UILayoutConstraintAxisHorizontal;
     row.alignment = UIStackViewAlignmentCenter;
-    row.distribution = UIStackViewDistributionEqualSpacing;
+    row.spacing = 12;
     return row;
 }
 
-- (void)viewWillDisappear:(BOOL)animated {
-    [super viewWillDisappear:animated];
-    [[CXHUD shared] setVisible:[CXConfig shared].hudEnabled];
+- (void)segmentChanged {
+    NSInteger i = _segment.selectedSegmentIndex;
+    _baseStack.hidden = (i != 0);
+    _modelStack.hidden = (i != 1);
+    _logStack.hidden = (i != 2);
+    _historyStack.hidden = (i != 3);
+    if (i == 2) [self refreshLog];
+    if (i == 3) [self reloadHistory];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self refreshLog];
+    [self reloadHistory];
+}
+
+- (void)reloadHistory {
+    _historyItems = [[CXHistory shared] all];
+    [_historyTable reloadData];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return _historyItems.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *cellID = @"cxHistoryCell";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cellID];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:cellID];
+        cell.textLabel.numberOfLines = 2;
+        cell.textLabel.font = [UIFont systemFontOfSize:13];
+        cell.detailTextLabel.font = [UIFont systemFontOfSize:12];
+        cell.detailTextLabel.textColor = [UIColor secondaryLabelColor];
+        cell.detailTextLabel.numberOfLines = 2;
+    }
+    NSDictionary *item = _historyItems[indexPath.row];
+    NSString *stem = item[@"stem"] ?: @"";
+    cell.textLabel.text = stem.length > 60 ? [[stem substringToIndex:60] stringByAppendingString:@"…"] : stem;
+    NSTimeInterval ts = [item[@"t"] doubleValue];
+    NSDateFormatter *f = [NSDateFormatter new];
+    f.dateFormat = @"MM-dd HH:mm";
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ · %@ · %@",
+                                 item[@"type"] ?: @"",
+                                 item[@"ans"] ?: @"",
+                                 [f stringFromDate:[NSDate dateWithTimeIntervalSince1970:ts]]];
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    NSDictionary *item = _historyItems[indexPath.row];
+    NSString *text = [NSString stringWithFormat:@"%@\n答案：%@", item[@"stem"] ?: @"", item[@"ans"] ?: @""];
+    [UIPasteboard generalPasteboard].string = text;
+    [[CXHUD shared] setStatus:@"已复制历史题"];
+}
+
+- (void)clearHistory {
+    [[CXHistory shared] clear];
+    [self reloadHistory];
 }
 
 - (void)delayChanged {
     _delayLabel.text = [NSString stringWithFormat:@"开始作答延迟：%.1f 秒", _delay.value];
 }
 
+- (void)refreshLog {
+    _logView.text = [CXLog tail:80];
+    [_logView setContentOffset:CGPointZero animated:NO];
+    unsigned long long sz = [CXLog logSize];
+    NSInteger domCount = 0;
+    unsigned long long domSize = 0;
+    NSString *dir = [[CXLog path] stringByDeletingLastPathComponent];
+    for (NSString *f in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:nil]) {
+        if ([f hasPrefix:@"cx-dom-"] && [f hasSuffix:@".html"]) {
+            domCount++;
+            NSDictionary *a = [[NSFileManager defaultManager] attributesOfItemAtPath:[dir stringByAppendingPathComponent:f] error:nil];
+            domSize += a ? [a fileSize] : 0;
+        }
+    }
+    _sizeLabel.text = [NSString stringWithFormat:@"日志 %.1f KB · DOM %ld 个 %.1f MB（保留最近 3 个）",
+                       sz / 1024.0, (long)domCount, domSize / 1048576.0];
+}
+
+- (void)cleanupFiles {
+    [CXLog cleanupAll];
+    [self refreshLog];
+}
+
+- (void)resetPanelPos {
+    [[CXHUD shared] resetPanelPosition];
+}
+
 - (void)save {
     CXConfig *c = [CXConfig shared];
     c.baseURL = _base.text.length ? _base.text : @"https://api.deepseek.com";
-    c.model = _model.text.length ? _model.text : @"deepseek-chat";
+    c.model = _model.text.length ? _model.text : c.model;
     c.apiKey = _key.text ?: @"";
     c.autoAnswer = _auto.isOn;
     c.guardEnabled = _guard.isOn;
     c.hudEnabled = _hud.isOn;
-    c.startDelay = _delay.value;
     c.visionEnabled = _vision.isOn;
+    c.startDelay = _delay.value;
     [c save];
-    CXLOG(@"设置已保存 base=%@ model=%@ keyLen=%lu", c.baseURL, c.model, (unsigned long)c.apiKey.length);
+    CXLOG(@"设置已保存 model=%@ keyLen=%lu vision=%d", c.model, (unsigned long)c.apiKey.length, c.visionEnabled);
     [[CXHUD shared] setVisible:c.hudEnabled];
     [self dismissViewControllerAnimated:YES completion:nil];
 }
@@ -273,6 +387,8 @@
     UIView *_answerBox;
     BOOL _panelShown;
     NSInteger _hideSeq;
+
+    CGFloat _panelTx, _panelTy, _panelScale;
 }
 
 + (instancetype)shared {
@@ -356,7 +472,7 @@
     _hintLabel.textColor = [UIColor colorWithWhite:1 alpha:0.55];
     _hintLabel.font = [UIFont systemFontOfSize:11];
     _hintLabel.numberOfLines = 2;
-    _hintLabel.text = @"状态：待机 · 双击重答 · 长按设置";
+    _hintLabel.text = @"待机 · 双击重答 · 长按设置";
     _hintLabel.textAlignment = NSTextAlignmentRight;
 
     UIStackView *head = [[UIStackView alloc] initWithArrangedSubviews:@[title, _hintLabel]];
@@ -424,15 +540,6 @@
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     [_panel.contentView addSubview:stack];
 
-    UIPanGestureRecognizer *panelPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePanelPan:)];
-    [_panel addGestureRecognizer:panelPan];
-
-    CGFloat savedTx = [[NSUserDefaults standardUserDefaults] doubleForKey:@"cx_panelTx"];
-    CGFloat savedTy = [[NSUserDefaults standardUserDefaults] doubleForKey:@"cx_panelTy"];
-    if (savedTx != 0 || savedTy != 0) {
-        _panel.transform = CGAffineTransformMakeTranslation(savedTx, savedTy);
-    }
-
     [NSLayoutConstraint activateConstraints:@[
         [_panel.leadingAnchor constraintEqualToAnchor:host.leadingAnchor constant:16],
         [_panel.trailingAnchor constraintEqualToAnchor:host.trailingAnchor constant:-16],
@@ -442,26 +549,80 @@
         [stack.trailingAnchor constraintEqualToAnchor:_panel.contentView.trailingAnchor constant:-14],
         [stack.bottomAnchor constraintEqualToAnchor:_panel.contentView.bottomAnchor constant:-12],
     ]];
+
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePanelPan:)];
+    [_panel addGestureRecognizer:pan];
+    UIPinchGestureRecognizer *pinch = [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(handlePanelPinch:)];
+    [_panel addGestureRecognizer:pinch];
+
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    _panelTx = [d doubleForKey:@"cx_panelTx"];
+    _panelTy = [d doubleForKey:@"cx_panelTy"];
+    _panelScale = [d objectForKey:@"cx_panelScale"] ? [d doubleForKey:@"cx_panelScale"] : 1.0;
+    if (_panelScale < 0.75) _panelScale = 1.0;
+    [self applyPanelTransform];
+}
+
+- (void)applyPanelTransform {
+    CGAffineTransform t = CGAffineTransformMakeTranslation(_panelTx, _panelTy);
+    t = CGAffineTransformScale(t, _panelScale, _panelScale);
+    _panel.transform = t;
+}
+
+- (void)savePanelTransform {
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    [d setDouble:_panelTx forKey:@"cx_panelTx"];
+    [d setDouble:_panelTy forKey:@"cx_panelTy"];
+    [d setDouble:_panelScale forKey:@"cx_panelScale"];
+}
+
+- (void)clampPanel {
+    CGRect f = _panel.frame;
+    CGRect b = _panel.superview.bounds;
+    CGFloat dx = 0, dy = 0;
+    if (CGRectGetMinX(f) < 4) dx = 4 - CGRectGetMinX(f);
+    if (CGRectGetMaxX(f) > b.size.width - 4) dx = b.size.width - 4 - CGRectGetMaxX(f);
+    if (CGRectGetMinY(f) < 4) dy = 4 - CGRectGetMinY(f);
+    if (CGRectGetMaxY(f) > b.size.height - 4) dy = b.size.height - 4 - CGRectGetMaxY(f);
+    if (dx != 0 || dy != 0) {
+        _panelTx += dx;
+        _panelTy += dy;
+        [self applyPanelTransform];
+    }
 }
 
 - (void)handlePanelPan:(UIPanGestureRecognizer *)g {
     CGPoint t = [g translationInView:_panel.superview];
-    _panel.transform = CGAffineTransformTranslate(_panel.transform, t.x, t.y);
+    _panelTx += t.x;
+    _panelTy += t.y;
     [g setTranslation:CGPointZero inView:_panel.superview];
+    [self applyPanelTransform];
     if (g.state == UIGestureRecognizerStateEnded) {
-        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-        [d setDouble:_panel.transform.tx forKey:@"cx_panelTx"];
-        [d setDouble:_panel.transform.ty forKey:@"cx_panelTy"];
+        [self clampPanel];
+        [self savePanelTransform];
+    }
+}
+
+- (void)handlePanelPinch:(UIPinchGestureRecognizer *)g {
+    CGFloat s = _panelScale * g.scale;
+    s = MAX(0.75, MIN(1.5, s));
+    _panelScale = s;
+    g.scale = 1;
+    [self applyPanelTransform];
+    if (g.state == UIGestureRecognizerStateEnded) {
+        [self clampPanel];
+        [self savePanelTransform];
     }
 }
 
 - (void)resetPanelPosition {
     dispatch_async(dispatch_get_main_queue(), ^{
-        self->_panel.transform = CGAffineTransformIdentity;
-        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-        [d setDouble:0 forKey:@"cx_panelTx"];
-        [d setDouble:0 forKey:@"cx_panelTy"];
-        [[CXHUD shared] setStatus:@"面板位置已重置"];
+        self->_panelTx = 0;
+        self->_panelTy = 0;
+        self->_panelScale = 1.0;
+        [self applyPanelTransform];
+        [self savePanelTransform];
+        [[CXHUD shared] setStatus:@"位置与缩放已重置"];
     });
 }
 
@@ -470,6 +631,13 @@
     CGPoint c = _ball.center;
     _ball.center = CGPointMake(c.x + p.x, c.y + p.y);
     [g setTranslation:CGPointZero inView:_ball.superview];
+    if (g.state == UIGestureRecognizerStateEnded) {
+        CGRect b = _ball.superview.bounds;
+        CGPoint cc = _ball.center;
+        cc.x = MAX(24, MIN(b.size.width - 24, cc.x));
+        cc.y = MAX(24, MIN(b.size.height - 24, cc.y));
+        _ball.center = cc;
+    }
 }
 
 - (void)handleTap {
@@ -521,7 +689,7 @@
 - (void)setStatus:(NSString *)status {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!self->_hintLabel) return;
-        self->_hintLabel.text = [NSString stringWithFormat:@"%@", status ?: @""];
+        self->_hintLabel.text = status ?: @"";
         BOOL bad = [status rangeOfString:@"0题"].location != NSNotFound
                 || [status rangeOfString:@"失败"].location != NSNotFound
                 || [status rangeOfString:@"错误"].location != NSNotFound
@@ -541,6 +709,7 @@
         self->_qLabel.text = stem.length ? stem : @"（未取到题干）";
         self->_bigLabel.text = letters.count ? [letters componentsJoinedByString:@" "] : @"";
         self->_aTextLabel.text = text.length ? text : (letters.count ? @"" : @"（空答案）");
+        self->_hintLabel.text = letters.count ? @"已出答案，正在点选" : @"已出答案，正在填入";
         if ([UIScreen mainScreen].isCaptured) return;
         self->_panel.hidden = NO;
         self->_panelShown = YES;

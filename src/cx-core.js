@@ -326,7 +326,7 @@
       window.__cxSentLogged = 1;
       post('log', 'found ' + found.length + ' but all sent');
     }
-    return list.length;
+    return found.length;
   }
 
   // ---------- 回填 ----------
@@ -379,14 +379,25 @@
     } catch (e) { post('log', 'jq err ' + e); return false; }
   }
 
+  function touchEvent(el, type, x, y) {
+    var ev;
+    try { ev = document.createEvent('Event'); } catch (e) { ev = new Event(type, { bubbles: true, cancelable: true }); }
+    ev.initEvent(type, true, true);
+    var pt = { identifier: 1, target: el, clientX: x, clientY: y, pageX: x + scrollX, pageY: y + scrollY, screenX: x, screenY: y };
+    try {
+      var list = (type === 'touchend' || type === 'touchcancel') ? [] : [pt];
+      Object.defineProperty(ev, 'touches', { value: list, configurable: true });
+      Object.defineProperty(ev, 'targetTouches', { value: list, configurable: true });
+      Object.defineProperty(ev, 'changedTouches', { value: [pt], configurable: true });
+    } catch (e) {}
+    try { el.dispatchEvent(ev); } catch (e) {}
+  }
+
   function fireTouch(el) {
     var p = areaOf(el);
     try { el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y })); } catch (e) {}
-    try {
-      var t = new Touch({ identifier: 1, target: el, clientX: p.x, clientY: p.y, pageX: p.x + scrollX, pageY: p.y + scrollY });
-      el.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [t], targetTouches: [t], changedTouches: [t] }));
-      el.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [t] }));
-    } catch (e) {}
+    touchEvent(el, 'touchstart', p.x, p.y);
+    setTimeout(function () { touchEvent(el, 'touchend', p.x, p.y); }, 40);
   }
 
   function fireMouse(el) {
@@ -397,9 +408,45 @@
     try { el.dispatchEvent(new MouseEvent('click', o)); } catch (e) {}
   }
 
+  function diagOf(el) {
+    var $ = window.jQuery || window.$;
+    var lib = 'none';
+    try {
+      if ($ && $.fn && $.fn.jquery) lib = 'jQuery' + $.fn.jquery;
+      else if ($ && $.zepto) lib = 'zepto';
+      else if ($) lib = 'other';
+    } catch (e) {}
+    var types = '-';
+    try {
+      if ($ && $._data) {
+        var evs = $._data(el, 'events');
+        if (evs) types = Object.keys(evs).join('/');
+      }
+    } catch (e) {}
+    return lib + ' ev=' + types;
+  }
+
+  function pointPress(el) {
+    var r = el.getBoundingClientRect();
+    var x = r.left + r.width / 2, y = r.top + r.height / 2;
+    var hit = null;
+    try { hit = document.elementFromPoint(x, y); } catch (e) {}
+    var target = hit || el;
+    try {
+      var box = target.closest ? target.closest('.answerList') : null;
+      if (box) target = box;
+    } catch (e) {}
+    post('log', 'point ' + (target.className || target.tagName));
+    fireTouch(target);
+    setTimeout(function () { fireMouse(target); }, 120);
+  }
+
   function selectItem(el, done) {
     var target = resolveTarget(el);
     var before = stateOf(target);
+    post('log', 'click ' + (target.className || '') + ' | ' + diagOf(target));
+
+    // 1) jQuery/zepto 里注册的处理函数，直接调用
     var types = ['click', 'tap', 'touchend', 'touchstart', 'mousedown'];
     for (var i = 0; i < types.length; i++) {
       if (jqFire(target, types[i])) {
@@ -412,6 +459,8 @@
         return;
       }
     }
+
+    // 2) 触摸（Safari 兼容写法）
     fireTouch(target);
     setTimeout(function () {
       if (stateOf(target) !== before) {
@@ -419,11 +468,29 @@
         done && done(true);
         return;
       }
+      // 3) 鼠标
       fireMouse(target);
       setTimeout(function () {
-        var after = stateOf(target);
-        post('log', 'state ' + before + ' -> ' + after);
-        done && done(after !== before);
+        if (stateOf(target) !== before) {
+          post('log', 'mouse ok ' + stateOf(target));
+          done && done(true);
+          return;
+        }
+        // 4) 坐标命中 + 内部元素兜底
+        pointPress(target);
+        setTimeout(function () {
+          if (stateOf(target) !== before) {
+            post('log', 'point ok ' + stateOf(target));
+            done && done(true);
+            return;
+          }
+          try { var info = target.querySelector('.answerInfo') || target.querySelector('cc'); if (info) fireMouse(info); } catch (e) {}
+          setTimeout(function () {
+            var after = stateOf(target);
+            post('log', 'state ' + before + ' -> ' + after + ' (all failed)');
+            done && done(after !== before);
+          }, 200);
+        }, 320);
       }, 240);
     }, 220);
   }
