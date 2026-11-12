@@ -8,6 +8,7 @@
 - (void)install;
 - (void)setStatus:(NSString *)status;
 - (void)showAnswer:(NSDictionary *)ans question:(NSString *)stem;
+- (void)setQuestionText:(NSString *)text;
 - (void)setVisible:(BOOL)visible;
 - (void)hideTemporarily:(NSTimeInterval)seconds;
 /// 主线程同步隐藏（截屏瞬间用）

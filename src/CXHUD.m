@@ -305,9 +305,9 @@
 
     _hintLabel = [UILabel new];
     _hintLabel.textColor = [UIColor lightGrayColor];
-    _hintLabel.font = [UIFont systemFontOfSize:11];
-    _hintLabel.numberOfLines = 1;
-    _hintLabel.text = @"单击收起 · 双击重答 · 长按设置";
+    _hintLabel.font = [UIFont systemFontOfSize:12];
+    _hintLabel.numberOfLines = 2;
+    _hintLabel.text = @"状态：待机 · 双击重答 · 长按设置";
 
     UIButton *again = [UIButton buttonWithType:UIButtonTypeSystem];
     [again setTitle:@"重新作答" forState:UIControlStateNormal];
@@ -382,11 +382,27 @@
     });
 }
 
+- (void)setQuestionText:(NSString *)text {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self->_qLabel) self->_qLabel.text = text;
+    });
+}
+
 - (void)setStatus:(NSString *)status {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (!self->_ballLabel) return;
-        self->_ballLabel.text = status.length > 4 ? [status substringToIndex:4] : status;
-        self->_hintLabel.text = status;
+        if (!self->_hintLabel) return;
+        // 球上只保留 AI 两个字，详细状态写到面板里
+        self->_ballLabel.text = @"AI";
+        self->_hintLabel.text = [NSString stringWithFormat:@"状态：%@", status ?: @""];
+        BOOL bad = [status rangeOfString:@"0题"].location != NSNotFound
+                || [status rangeOfString:@"失败"].location != NSNotFound
+                || [status rangeOfString:@"错误"].location != NSNotFound
+                || [status rangeOfString:@"无响应"].location != NSNotFound
+                || [status rangeOfString:@"未注入"].location != NSNotFound
+                || [status rangeOfString:@"无WebView"].location != NSNotFound
+                || [status rangeOfString:@"缺Key"].location != NSNotFound;
+        UIColor *c = bad ? [UIColor systemRedColor] : [UIColor systemBlueColor];
+        self->_ball.backgroundColor = [c colorWithAlphaComponent:0.45];
     });
 }
 

@@ -76,6 +76,7 @@
     for (var i = 0; i < all.length && i < 6000; i++) {
       var el = all[i], t = txt(el);
       if (!isOpt(t)) continue;
+      if (t.length > 160) continue;
       var p = el.parentElement;
       if (p) {
         var pt = txt(p);
@@ -163,6 +164,79 @@
     return out;
   }
 
+  // ---------- 学习通考试页（exam-ans v3）专用：结构稳定 ----------
+  function collectChaoxing() {
+    var out = [];
+    var blocks = [];
+    try { blocks = document.querySelectorAll('.answerMain'); } catch (e) {}
+    if (!blocks.length) {
+      try { blocks = document.querySelectorAll('.answerCon'); } catch (e) {}
+    }
+    for (var i = 0; i < blocks.length; i++) {
+      var n = blocks[i];
+      var items = [];
+      try { items = n.querySelectorAll('.answerList'); } catch (e) {}
+      var opts = [];
+      for (var j = 0; j < items.length; j++) {
+        var it = items[j];
+        var L = (it.getAttribute('name') || '').toUpperCase();
+        if (!/^[A-H]$/.test(L)) {
+          var no = it.querySelector('.No');
+          if (no) L = txt(no).toUpperCase();
+        }
+        if (!/^[A-H]$/.test(L)) continue;
+        var info = it.querySelector('.answerInfo') || it;
+        var t = txt(info);
+        if (!t || t.length > 400) continue;
+        opts.push({ k: L, t: t, el: it });
+      }
+      if (opts.length < 2) continue;
+
+      var stem = '';
+      var tit = n.querySelector('.tit');
+      if (tit) {
+        var ps = tit.querySelectorAll('p');
+        var parts = [];
+        for (var k = 0; k < ps.length; k++) {
+          var sp = txt(ps[k]);
+          if (sp) parts.push(sp);
+        }
+        if (parts.length) {
+          stem = parts.join(' ');
+        } else {
+          var clone = tit.cloneNode(true);
+          var h3 = clone.querySelector('h3');
+          if (h3) h3.parentNode.removeChild(h3);
+          stem = txt(clone);
+        }
+      }
+      stem = stem.replace(/^\s*\d+\s*[\.、．]\s*/, '')
+                 .replace(/^[（(]\s*[\d.]+\s*分\s*[)）]\s*/, '')
+                 .replace(/\s+/g, ' ')
+                 .trim();
+      if (!stem || stem.length < 2) continue;
+
+      var type = 'single';
+      var tn = n.querySelector('input[name^="typeName"]');
+      var tnv = tn ? (tn.value || '') : '';
+      if (/多选|不定项/.test(tnv)) type = 'multi';
+      else if (/判断/.test(tnv)) type = 'single';
+      else if (/填空|简答|论述|名词解释|分析/.test(tnv)) type = 'blank';
+      else if (/多选题/.test(txt(tit))) type = 'multi';
+
+      out.push({
+        idx: out.length,
+        h: hash(stem),
+        stem: stem,
+        opts: opts.map(function (o) { return { k: o.k, t: o.t }; }),
+        type: type,
+        node: n,
+        items: opts.map(function (o) { return o.el; })
+      });
+    }
+    return out;
+  }
+
   // 已知容器优先（老版学习通 / 作业页）
   function collectFromContainers() {
     var sels = ['.questionLi', '.TiMu', 'div[data-qid]', '.exam-question', '.queBox'];
@@ -203,7 +277,8 @@
   }
 
   function collect(force) {
-    var found = collectFromContainers();
+    var found = collectChaoxing();
+    if (!found.length) found = collectFromContainers();
     if (!found.length) {
       var off = 0;
       docs(document, 3).forEach(function (doc) {
@@ -233,6 +308,11 @@
 
   // ---------- 回填 ----------
   function findItem(block, letter) {
+    var named = [];
+    try { named = block.querySelectorAll('[name]'); } catch (e) {}
+    for (var n = 0; n < named.length; n++) {
+      if ((named[n].getAttribute('name') || '').toUpperCase() === letter) return named[n];
+    }
     var cands = [];
     try { cands = block.querySelectorAll('li,div,label,span,a,p'); } catch (e) {}
     for (var i = 0; i < cands.length; i++) {
@@ -257,10 +337,10 @@
       target = target.parentElement;
     }
     if (!target) target = el;
+    // 只产生一次 click，多选题点两次会被取消
+    try { target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+    try { target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
     try { target.click(); } catch (e) {}
-    ['mousedown', 'mouseup', 'click'].forEach(function (type) {
-      try { target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window })); } catch (e) {}
-    });
     try { target.scrollIntoView({ block: 'center' }); } catch (e) {}
   }
 

@@ -167,8 +167,16 @@ static char kInstalledKey;
         }
         CXLOG(@"grab 返回 %@", r);
         NSInteger n = [r respondsToSelector:@selector(integerValue)] ? [r integerValue] : -1;
-        if (n < 0) [[CXHUD shared] setStatus:@"JS未注入"];
-        else [[CXHUD shared] setStatus:[NSString stringWithFormat:@"抓到%ld题", (long)n]];
+        if (n < 0) {
+            [[CXHUD shared] setStatus:@"JS未注入"];
+            [[CXHUD shared] setQuestionText:@"脚本没有注入到页面"];
+        } else if (n == 0) {
+            [[CXHUD shared] setStatus:@"抓到0题"];
+            [[CXHUD shared] setQuestionText:@"页面里没识别到题目，已存 DOM 快照"];
+        } else {
+            [[CXHUD shared] setStatus:[NSString stringWithFormat:@"抓到%ld题", (long)n]];
+            [[CXHUD shared] setQuestionText:@"已抓题，等待模型回答…"];
+        }
     }];
 }
 
