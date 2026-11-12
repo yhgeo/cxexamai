@@ -165,6 +165,22 @@
     return out;
   }
 
+  function collectImages(node) {
+    var out = [], seen = {};
+    var imgs = [];
+    try { imgs = node.querySelectorAll('img'); } catch (e) {}
+    for (var i = 0; i < imgs.length && out.length < 3; i++) {
+      var src = imgs[i].src || imgs[i].getAttribute('data-src') || '';
+      if (!src || /^data:/.test(src) || seen[src]) continue;
+      var w = imgs[i].naturalWidth || imgs[i].width || 0;
+      var h = imgs[i].naturalHeight || imgs[i].height || 0;
+      if (w && h && (w < 50 || h < 30)) continue;   // 忽略图标
+      seen[src] = 1;
+      out.push(src);
+    }
+    return out;
+  }
+
   // ---------- 学习通考试页（exam-ans v3）专用：结构稳定 ----------
   function collectChaoxing() {
     var out = [];
@@ -234,6 +250,7 @@
         stem: stem,
         opts: opts.map(function (o) { return { k: o.k, t: o.t }; }),
         type: type,
+        imgs: collectImages(n),
         node: n,
         items: opts.map(function (o) { return o.el; })
       });
@@ -295,13 +312,14 @@
     var list = [];
     for (var i = 0; i < found.length; i++) {
       var q = found[i];
-      if (!force && SENT[q.h]) continue;
-      SENT[q.h] = 1;
+      var now = Date.now();
+      if (!force && SENT[q.h] && now - SENT[q.h] < 300000) continue;
+      SENT[q.h] = now;
       list.push(q);
     }
     if (list.length) {
       post('q', list.map(function (q) {
-        return { idx: q.idx, h: q.h, stem: q.stem, opts: q.opts, type: q.type };
+        return { idx: q.idx, h: q.h, stem: q.stem, opts: q.opts, type: q.type, imgs: q.imgs || [] };
       }));
       post('log', 'report ' + list.length + '/' + found.length);
     } else if (found.length && !window.__cxSentLogged) {

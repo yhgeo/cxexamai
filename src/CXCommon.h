@@ -1,13 +1,15 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-#define CX_VERSION @"1.2.1"
+#define CX_VERSION @"1.3.0"
 #define CXLOG(...) [CXLog write:__VA_ARGS__]
 
 @interface CXLog : NSObject
 + (void)write:(NSString *)fmt, ...;
 + (NSString *)path;
 + (NSString *)tail:(NSUInteger)lines;
++ (unsigned long long)logSize;
++ (void)cleanupAll;
 @end
 
 @interface CXConfig : NSObject
@@ -19,6 +21,7 @@
 @property (nonatomic, assign) BOOL hudEnabled;
 @property (nonatomic, assign) double startDelay;   // 检测到题目后多久开始作答
 @property (nonatomic, assign) double gapDelay;     // 多题之间的间隔
+@property (nonatomic, assign) BOOL visionEnabled;  // 题目含图片时用视觉模型
 + (instancetype)shared;
 - (void)reload;
 - (void)save;

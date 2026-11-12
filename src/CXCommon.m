@@ -19,6 +19,23 @@ static NSDateFormatter *gFmt;
     return [dir stringByAppendingPathComponent:kLogName];
 }
 
++ (unsigned long long)logSize {
+    NSDictionary *attr = [[NSFileManager defaultManager] attributesOfItemAtPath:[self path] error:nil];
+    return attr ? [attr fileSize] : 0;
+}
+
++ (void)cleanupAll {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [[self path] stringByDeletingLastPathComponent];
+    for (NSString *f in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+        if ([f hasPrefix:@"cx-dom-"] && [f hasSuffix:@".html"]) {
+            [fm removeItemAtPath:[dir stringByAppendingPathComponent:f] error:nil];
+        }
+    }
+    [fm removeItemAtPath:[self path] error:nil];
+    CXLOG(@"日志与 DOM 已清理");
+}
+
 + (NSString *)tail:(NSUInteger)lines {
     NSString *s = [NSString stringWithContentsOfFile:[self path] encoding:NSUTF8StringEncoding error:nil];
     if (s.length == 0) return @"（暂无日志）";
@@ -82,6 +99,8 @@ static NSDateFormatter *gFmt;
     self.hudEnabled = hudObj ? [d boolForKey:@"cx_hud"] : YES;
     self.startDelay = [d objectForKey:@"cx_startDelay"] ? [d doubleForKey:@"cx_startDelay"] : 1.5;
     self.gapDelay = [d objectForKey:@"cx_gap"] ? [d doubleForKey:@"cx_gap"] : 2.0;
+    id visionObj = [d objectForKey:@"cx_vision"];
+    self.visionEnabled = visionObj ? [d boolForKey:@"cx_vision"] : YES;
 }
 
 - (void)save {
@@ -94,6 +113,7 @@ static NSDateFormatter *gFmt;
     [d setBool:self.hudEnabled forKey:@"cx_hud"];
     [d setDouble:self.startDelay forKey:@"cx_startDelay"];
     [d setDouble:self.gapDelay forKey:@"cx_gap"];
+    [d setBool:self.visionEnabled forKey:@"cx_vision"];
     [d synchronize];
 }
 

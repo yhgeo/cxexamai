@@ -1,7 +1,6 @@
 #import "CXAI.h"
 #import "CXCommon.h"
 #import "CXHUD.h"
-#import <objc/runtime.h>
 
 static NSString *const kSystemPrompt =
 @"你是中国高校在线考试的答题引擎。只输出一个 JSON 对象，不输出解释、不输出 Markdown 代码块。\n"
@@ -13,9 +12,8 @@ static NSString *const kSystemPrompt =
 "4. 填空题：answer 为空数组，text 为各空答案，多个空用 ||| 分隔，顺序与空位一致。\n"
 "5. 简答题/论述题：answer 为空数组，text 为完整答案，分点用 1. 2. 3.。\n"
 "6. 信息不足无法判断：{\"answer\":[],\"text\":\"\",\"confidence\":0}\n"
-"示例：输入「题型=多选题；题干=下列属于…的有；选项=A.甲 B.乙 C.丙 D.丁」，"
-"输出 {\"answer\":[\"A\",\"C\"],\"text\":\"\",\"confidence\":0.92}\n"
-"注意：题干或选项里的错别字按教材常见表述理解；不要臆造选项字母。";
+"若题目附带图片（电路图、波形图、几何图等），必须结合图片内容作答。\n"
+"题干或选项里的错别字按教材常见表述理解；不要臆造选项字母。";
 
 @interface CXAI ()
 @property (nonatomic, strong) NSMutableSet<NSString *> *inflight;
@@ -33,7 +31,7 @@ static NSString *const kSystemPrompt =
         s.cache = [NSMutableDictionary dictionary];
         NSURLSessionConfiguration *c = [NSURLSessionConfiguration defaultSessionConfiguration];
         c.timeoutIntervalForRequest = 60;
-        c.timeoutIntervalForResource = 90;
+        c.timeoutIntervalForResource = 120;
         s.session = [NSURLSession sessionWithConfiguration:c];
     });
     return s;
@@ -49,25 +47,25 @@ static NSString *const kSystemPrompt =
     return [b stringByAppendingString:@"/v1/chat/completions"];
 }
 
-- (NSString *)typeName:(NSString *)type {
+- (NSString *)typeNameFor:(NSString *)type {
     if ([type isEqualToString:@"multi"]) return @"多选题";
-    if ([type isEqualToString:@"blank"]) return @"填空题/简答题";
-    return @"单选题或判断题";
+    if ([type isEqualToString:@"judge"]) return @"判断题";
+    if ([type isEqualToString:@"blank"]) return @"填空题或简答题";
+    return @"单选题";
 }
 
 - (NSString *)requirementFor:(NSString *)type {
     if ([type isEqualToString:@"multi"]) return @"选出全部正确选项，answer 输出 2~4 个字母并升序排列。";
-    if ([type isEqualToString:@"blank"]) return @"按空位顺序给出答案，多个空用 ||| 分隔；简答题写在 text 里。";
     if ([type isEqualToString:@"judge"]) return @"判断题：A=正确，B=错误，answer 输出一个字母。";
+    if ([type isEqualToString:@"blank"]) return @"按空位顺序给出答案，多个空用 ||| 分隔；简答题写在 text 里。";
     return @"只选一个最符合的选项，answer 输出一个字母。";
 }
 
 - (NSDictionary *)solvePayloadFor:(NSDictionary *)q {
     NSString *type = q[@"type"] ?: @"single";
-    if ([type isEqualToString:@"single"]) {
-        NSString *stem = q[@"stem"] ?: @"";
-        if ([stem rangeOfString:@"判断"].location != NSNotFound) type = @"judge";
-    }
+    NSString *stem = q[@"stem"] ?: @"";
+    if ([type isEqualToString:@"single"] && [stem rangeOfString:@"判断"].location != NSNotFound) type = @"judge";
+
     NSMutableString *optText = [NSMutableString string];
     for (NSDictionary *o in q[@"opts"] ?: @[]) {
         NSString *k = o[@"k"] ?: @"";
@@ -77,15 +75,20 @@ static NSString *const kSystemPrompt =
     }
     if (optText.length == 0) [optText appendString:@"（无选项，按填空或简答处理）\n"];
 
+    NSArray *imgs = q[@"imgs"];
+    NSString *imgNote = imgs.count ? [NSString stringWithFormat:@"\n【图片】本题附 %lu 张图片，已在消息中提供。", (unsigned long)imgs.count] : @"";
+
     NSString *content = [NSString stringWithFormat:
-                         @"【题型】%@\n【题干】%@\n【选项】\n%@【要求】%@",
-                         [self typeName:type], q[@"stem"] ?: @"", optText, [self requirementFor:type]];
+                         @"【题型】%@\n【题干】%@\n【选项】\n%@【要求】%@%@",
+                         [self typeNameFor:type], stem, optText, [self requirementFor:type], imgNote];
     return @{@"type": type, @"content": content};
 }
 
 - (NSString *)cacheKey:(NSDictionary *)q {
     return [NSString stringWithFormat:@"%lu", (unsigned long)[(q[@"stem"] ?: @"") hash]];
 }
+
+#pragma mark - 求解
 
 - (void)solve:(NSDictionary *)question inWebView:(WKWebView *)webView frame:(WKFrameInfo *)frame {
     if (![question isKindOfClass:[NSDictionary class]]) return;
@@ -117,9 +120,81 @@ static NSString *const kSystemPrompt =
     }
 
     NSDictionary *payload = [self solvePayloadFor:question];
-    NSDictionary *body = @{@"model": cfg.model ?: @"deepseek-chat",
-                           @"messages": @[@{@"role": @"system", @"content": kSystemPrompt},
-                                          @{@"role": @"user", @"content": payload[@"content"]}],
+    CXLOG(@"请求 %@ 题型=%@ 题:%@", cfg.model, payload[@"type"], [stem substringToIndex:MIN((NSUInteger)30, stem.length)]);
+    CXLOG(@"prompt: %@", [payload[@"content"] substringToIndex:MIN((NSUInteger)260, [payload[@"content"] length])]);
+    [[CXHUD shared] setStatus:@"思考中…"];
+
+    NSArray *imgs = question[@"imgs"];
+    if (cfg.visionEnabled && [imgs isKindOfClass:[NSArray class]] && imgs.count) {
+        [[CXHUD shared] setStatus:@"下载题图…"];
+        CXLOG(@"题目含 %lu 张图，开始下载", (unsigned long)imgs.count);
+        __weak typeof(self) weakSelf = self;
+        [self fetchImages:imgs completion:^(NSArray<NSString *> *b64List) {
+            CXAI *strongSelf = weakSelf;
+            if (!strongSelf) return;
+            CXLOG(@"图片下载完成 %lu 张", (unsigned long)b64List.count);
+            [strongSelf requestPayload:payload images:b64List question:question webView:webView frame:frame key:key];
+        }];
+    } else {
+        [self requestPayload:payload images:@[] question:question webView:webView frame:frame key:key];
+    }
+}
+
+- (void)fetchImages:(NSArray *)urls completion:(void (^)(NSArray<NSString *> *))done {
+    NSMutableArray *out = [NSMutableArray array];
+    NSLock *lock = [NSLock new];
+    dispatch_group_t group = dispatch_group_create();
+    NSInteger maxCount = MIN((NSInteger)urls.count, 3);
+
+    for (NSInteger i = 0; i < maxCount; i++) {
+        id item = urls[i];
+        if (![item isKindOfClass:[NSString class]]) continue;
+        NSURL *url = [NSURL URLWithString:item];
+        if (!url) continue;
+        dispatch_group_enter(group);
+        [[self.session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+            if (data.length > 1000 && data.length < 4 * 1024 * 1024) {
+                NSString *b64 = [data base64EncodedStringWithOptions:0];
+                [lock lock];
+                if (out.count < 3) [out addObject:b64];
+                [lock unlock];
+            }
+            dispatch_group_leave(group);
+        }] resume];
+    }
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{ done([out copy]); });
+}
+
+- (NSArray *)messagesWithPayload:(NSDictionary *)payload images:(NSArray<NSString *> *)images {
+    NSMutableArray *msgs = [NSMutableArray array];
+    [msgs addObject:@{@"role": @"system", @"content": kSystemPrompt}];
+
+    if (images.count == 0) {
+        [msgs addObject:@{@"role": @"user", @"content": payload[@"content"]}];
+        return msgs;
+    }
+    NSMutableArray *parts = [NSMutableArray array];
+    [parts addObject:@{@"type": @"text", @"text": payload[@"content"]}];
+    for (NSString *b64 in images) {
+        NSString *mime = [b64 hasPrefix:@"iVBOR"] ? @"image/png" : @"image/jpeg";
+        NSString *dataURL = [NSString stringWithFormat:@"data:%@;base64,%@", mime, b64];
+        [parts addObject:@{@"type": @"image_url", @"image_url": @{@"url": dataURL}}];
+    }
+    [msgs addObject:@{@"role": @"user", @"content": parts}];
+    return msgs;
+}
+
+- (void)requestPayload:(NSDictionary *)payload
+                images:(NSArray<NSString *> *)images
+              question:(NSDictionary *)question
+               webView:(WKWebView *)webView
+                 frame:(WKFrameInfo *)frame
+                   key:(NSString *)key {
+    NSArray *messages = [self messagesWithPayload:payload images:images];
+    BOOL hasImage = images.count > 0;
+
+    NSDictionary *body = @{@"model": [CXConfig shared].model ?: @"deepseek-chat",
+                           @"messages": messages,
                            @"temperature": @0.1,
                            @"max_tokens": @3000,
                            @"stream": @NO};
@@ -128,18 +203,24 @@ static NSString *const kSystemPrompt =
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[self endpoint]]];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    [req setValue:[@"Bearer " stringByAppendingString:cfg.apiKey] forHTTPHeaderField:@"Authorization"];
+    [req setValue:[@"Bearer " stringByAppendingString:[CXConfig shared].apiKey ?: @""] forHTTPHeaderField:@"Authorization"];
     req.HTTPBody = bodyData;
-
-    CXLOG(@"请求 %@ 题型=%@ 题:%@", cfg.model, payload[@"type"], [stem substringToIndex:MIN((NSUInteger)30, stem.length)]);
-    CXLOG(@"prompt: %@", [payload[@"content"] substringToIndex:MIN((NSUInteger)260, [payload[@"content"] length])]);
-    [[CXHUD shared] setStatus:@"思考中…"];
 
     __weak typeof(self) weakSelf = self;
     __weak WKWebView *weakWV = webView;
-    NSURLSessionDataTask *task = [self.session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+    [[self.session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         CXAI *strongSelf = weakSelf;
         if (!strongSelf) return;
+        NSInteger code = [(NSHTTPURLResponse *)resp statusCode];
+
+        // 带图请求失败：降级为纯文本再试一次
+        if (hasImage && (err || code >= 400)) {
+            NSString *raw = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
+            CXLOG(@"带图请求失败 code=%ld %@，降级纯文本", (long)code, [raw substringToIndex:MIN((NSUInteger)120, raw.length)]);
+            [strongSelf requestPayload:payload images:@[] question:question webView:weakWV frame:frame key:key];
+            return;
+        }
+
         if (err || data.length == 0) {
             CXLOG(@"请求失败 %@", err.localizedDescription);
             [[CXHUD shared] setStatus:@"网络失败"];
@@ -158,7 +239,7 @@ static NSString *const kSystemPrompt =
                     if (!content) {
                         id rc = msg[@"reasoning_content"];
                         if ([rc isKindOfClass:[NSString class]] && [rc length]) {
-                            CXLOG(@"content 为空，回退 reasoning_content (%lu 字)", (unsigned long)[rc length]);
+                            CXLOG(@"content 为空，回退 reasoning_content");
                             content = rc;
                         }
                     }
@@ -177,17 +258,19 @@ static NSString *const kSystemPrompt =
             @synchronized (strongSelf.inflight) { [strongSelf.inflight removeObject:key]; }
             return;
         }
+
         NSDictionary *ans = [strongSelf parseAnswer:content];
         CXLOG(@"答案 %@", ans);
-        if (ans[@"answer"] && [ans[@"answer"] count]) strongSelf.cache[key] = ans;
+        if ([ans[@"answer"] count]) strongSelf.cache[key] = ans;
         dispatch_async(dispatch_get_main_queue(), ^{
-            [[CXHUD shared] showAnswer:ans question:stem];
+            [[CXHUD shared] showAnswer:ans question:question[@"stem"]];
             [strongSelf fill:ans question:question webView:weakWV frame:frame];
             @synchronized (strongSelf.inflight) { [strongSelf.inflight removeObject:key]; }
         });
-    }];
-    [task resume];
+    }] resume];
 }
+
+#pragma mark - 解析
 
 - (NSDictionary *)parseAnswer:(NSString *)content {
     NSString *s = [content stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -202,38 +285,36 @@ static NSString *const kSystemPrompt =
     }
     for (NSString *json in [self jsonCandidates:s]) {
         NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
-        if ([d isKindOfClass:[NSDictionary class]] && (d[@"answer"] || d[@"text"])) {
-            id answer = d[@"answer"];
-            NSMutableArray *letters = [NSMutableArray array];
-            if ([answer isKindOfClass:[NSArray class]]) {
-                for (id v in answer) {
-                    if ([v isKindOfClass:[NSString class]]) {
-                        NSString *u = [v uppercaseString];
-                        for (NSUInteger i = 0; i < u.length; i++) {
-                            unichar c = [u characterAtIndex:i];
-                            if (c >= 'A' && c <= 'H') [letters addObject:[NSString stringWithFormat:@"%C", c]];
-                        }
-                    }
-                }
-            } else if ([answer isKindOfClass:[NSString class]]) {
-                NSString *u = [answer uppercaseString];
+        if (![d isKindOfClass:[NSDictionary class]]) continue;
+        if (!d[@"answer"] && !d[@"text"]) continue;
+
+        id answer = d[@"answer"];
+        NSMutableArray *letters = [NSMutableArray array];
+        if ([answer isKindOfClass:[NSArray class]]) {
+            for (id v in answer) {
+                if (![v isKindOfClass:[NSString class]]) continue;
+                NSString *u = [v uppercaseString];
                 for (NSUInteger i = 0; i < u.length; i++) {
                     unichar c = [u characterAtIndex:i];
                     if (c >= 'A' && c <= 'H') [letters addObject:[NSString stringWithFormat:@"%C", c]];
                 }
             }
-            // 去重并排序
-            NSArray *uniq = [[NSSet setWithArray:letters] allObjects];
-            uniq = [uniq sortedArrayUsingSelector:@selector(compare:)];
-            NSString *text = d[@"text"];
-            if (![text isKindOfClass:[NSString class]]) text = @"";
-            return @{@"answer": uniq, @"text": text};
+        } else if ([answer isKindOfClass:[NSString class]]) {
+            NSString *u = [answer uppercaseString];
+            for (NSUInteger i = 0; i < u.length; i++) {
+                unichar c = [u characterAtIndex:i];
+                if (c >= 'A' && c <= 'H') [letters addObject:[NSString stringWithFormat:@"%C", c]];
+            }
         }
+        NSArray *uniq = [[NSSet setWithArray:letters] allObjects];
+        uniq = [uniq sortedArrayUsingSelector:@selector(compare:)];
+        NSString *text = d[@"text"];
+        if (![text isKindOfClass:[NSString class]]) text = @"";
+        return @{@"answer": uniq, @"text": text};
     }
     return @{@"answer": @[], @"text": @""};
 }
 
-/// 从文本尾部向前提取所有可解析的 JSON 对象，优先最后一个完整对象
 - (NSArray<NSString *> *)jsonCandidates:(NSString *)s {
     NSMutableArray *out = [NSMutableArray array];
     NSInteger end = (NSInteger)s.length - 1;
@@ -251,6 +332,8 @@ static NSString *const kSystemPrompt =
     }
     return out;
 }
+
+#pragma mark - 回填
 
 - (void)fill:(NSDictionary *)ans question:(NSDictionary *)q webView:(WKWebView *)wv frame:(WKFrameInfo *)frame {
     if (!wv) return;

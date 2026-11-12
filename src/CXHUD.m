@@ -27,6 +27,8 @@
     UILabel *_delayLabel;
     UILabel *_testLabel;
     UITextView *_logView;
+    UILabel *_sizeLabel;
+    UISwitch *_vision;
 }
 
 - (void)viewDidLoad {
@@ -63,6 +65,7 @@
     _auto = [UISwitch new]; _auto.on = c.autoAnswer;
     _guard = [UISwitch new]; _guard.on = c.guardEnabled;
     _hud = [UISwitch new]; _hud.on = c.hudEnabled;
+    _vision = [UISwitch new]; _vision.on = c.visionEnabled;
 
     _delayLabel = [UILabel new];
     _delayLabel.font = [UIFont systemFontOfSize:14];
@@ -91,6 +94,14 @@
 
     UIButton *refresh = [self button:@"刷新日志" action:@selector(refreshLog)];
     UIButton *share = [self button:@"导出日志 + DOM 快照" action:@selector(shareLog)];
+    UIButton *clean = [self button:@"清理日志与 DOM" action:@selector(cleanupFiles)];
+    UIButton *resetPanel = [self button:@"重置悬浮窗位置" action:@selector(resetPanelPos)];
+
+    _sizeLabel = [UILabel new];
+    _sizeLabel.font = [UIFont systemFontOfSize:12];
+    _sizeLabel.textColor = [UIColor secondaryLabelColor];
+    _sizeLabel.numberOfLines = 1;
+    _sizeLabel.text = @"";
 
     UILabel *logTitle = [UILabel new];
     logTitle.text = @"最近日志（60 行）";
@@ -107,21 +118,48 @@
     tip.font = [UIFont systemFontOfSize:12];
     tip.textColor = [UIColor secondaryLabelColor];
     tip.numberOfLines = 0;
-    tip.text = @"单击悬浮球展开答案，双击立即重答，长按打开本页。\n答案会先点真实选项触发选中，再回填文本题。\n提示：deepseek-reasoner / flash 等推理模型可能返回空 content，建议用 deepseek-chat。";
+    tip.text = @"单击悬浮球展开答案，双击立即重答，长按打开本页。\n面板可按住拖动，位置会自动记住。\n模型名填你的接口实际支持的名称，接口换模型后同步改这里。";
 
     NSArray *views = @[_base, _model, _key,
                        [self rowWithTitle:@"自动答题" control:_auto],
                        [self rowWithTitle:@"考试页防检测" control:_guard],
                        [self rowWithTitle:@"显示悬浮球" control:_hud],
+                       [self rowWithTitle:@"识别题目图片（需视觉模型）" control:_vision],
                        _delayLabel, _delay, test, _testLabel,
-                       logTitle, _logView, refresh, share, pathLabel, tip];
+                       logTitle, _sizeLabel, _logView, refresh, clean, share, resetPanel, pathLabel, tip];
     for (UIView *v in views) [stack addArrangedSubview:v];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+    [self refreshLog];
+}
+
+- (void)refreshLog {
     _logView.text = [CXLog tail:60];
     [_logView setContentOffset:CGPointZero animated:NO];
+    unsigned long long sz = [CXLog logSize];
+    NSInteger domCount = 0;
+    unsigned long long domSize = 0;
+    NSString *dir = [[CXLog path] stringByDeletingLastPathComponent];
+    for (NSString *f in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:nil]) {
+        if ([f hasPrefix:@"cx-dom-"] && [f hasSuffix:@".html"]) {
+            domCount++;
+            NSDictionary *a = [[NSFileManager defaultManager] attributesOfItemAtPath:[dir stringByAppendingPathComponent:f] error:nil];
+            domSize += a ? [a fileSize] : 0;
+        }
+    }
+    _sizeLabel.text = [NSString stringWithFormat:@"日志 %.1f KB · DOM %ld 个 %.1f MB（自动保留最近 3 个）",
+                       sz / 1024.0, (long)domCount, domSize / 1048576.0];
+}
+
+- (void)cleanupFiles {
+    [CXLog cleanupAll];
+    [self refreshLog];
+}
+
+- (void)resetPanelPos {
+    [[CXHUD shared] resetPanelPosition];
 }
 
 - (UIButton *)button:(NSString *)title action:(SEL)action {
@@ -167,11 +205,6 @@
     _delayLabel.text = [NSString stringWithFormat:@"开始作答延迟：%.1f 秒", _delay.value];
 }
 
-- (void)refreshLog {
-    _logView.text = [CXLog tail:60];
-    [_logView setContentOffset:CGPointZero animated:NO];
-}
-
 - (void)save {
     CXConfig *c = [CXConfig shared];
     c.baseURL = _base.text.length ? _base.text : @"https://api.deepseek.com";
@@ -181,6 +214,7 @@
     c.guardEnabled = _guard.isOn;
     c.hudEnabled = _hud.isOn;
     c.startDelay = _delay.value;
+    c.visionEnabled = _vision.isOn;
     [c save];
     CXLOG(@"设置已保存 base=%@ model=%@ keyLen=%lu", c.baseURL, c.model, (unsigned long)c.apiKey.length);
     [[CXHUD shared] setVisible:c.hudEnabled];
@@ -390,6 +424,15 @@
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     [_panel.contentView addSubview:stack];
 
+    UIPanGestureRecognizer *panelPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePanelPan:)];
+    [_panel addGestureRecognizer:panelPan];
+
+    CGFloat savedTx = [[NSUserDefaults standardUserDefaults] doubleForKey:@"cx_panelTx"];
+    CGFloat savedTy = [[NSUserDefaults standardUserDefaults] doubleForKey:@"cx_panelTy"];
+    if (savedTx != 0 || savedTy != 0) {
+        _panel.transform = CGAffineTransformMakeTranslation(savedTx, savedTy);
+    }
+
     [NSLayoutConstraint activateConstraints:@[
         [_panel.leadingAnchor constraintEqualToAnchor:host.leadingAnchor constant:16],
         [_panel.trailingAnchor constraintEqualToAnchor:host.trailingAnchor constant:-16],
@@ -399,6 +442,27 @@
         [stack.trailingAnchor constraintEqualToAnchor:_panel.contentView.trailingAnchor constant:-14],
         [stack.bottomAnchor constraintEqualToAnchor:_panel.contentView.bottomAnchor constant:-12],
     ]];
+}
+
+- (void)handlePanelPan:(UIPanGestureRecognizer *)g {
+    CGPoint t = [g translationInView:_panel.superview];
+    _panel.transform = CGAffineTransformTranslate(_panel.transform, t.x, t.y);
+    [g setTranslation:CGPointZero inView:_panel.superview];
+    if (g.state == UIGestureRecognizerStateEnded) {
+        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+        [d setDouble:_panel.transform.tx forKey:@"cx_panelTx"];
+        [d setDouble:_panel.transform.ty forKey:@"cx_panelTy"];
+    }
+}
+
+- (void)resetPanelPosition {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_panel.transform = CGAffineTransformIdentity;
+        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+        [d setDouble:0 forKey:@"cx_panelTx"];
+        [d setDouble:0 forKey:@"cx_panelTy"];
+        [[CXHUD shared] setStatus:@"面板位置已重置"];
+    });
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)g {

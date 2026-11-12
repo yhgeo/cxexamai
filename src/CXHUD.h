@@ -13,4 +13,5 @@
 - (void)hideTemporarily:(NSTimeInterval)seconds;
 /// 主线程同步隐藏（截屏瞬间用）
 - (void)hideNow;
+- (void)resetPanelPosition;
 @end

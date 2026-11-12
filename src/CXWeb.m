@@ -12,12 +12,15 @@ extern unsigned int cx_core_js_len;
 
 static NSHashTable *gWebViews;
 static NSHashTable *gExamWebViews;
-static NSMutableSet *gAnswered;
+static NSMutableDictionary *gAnswered;   // hash -> 时间戳
 static NSTimeInterval gLastMsgAt = 0;
 static char kInstalledKey;
 
 @interface CXWeb (Install)
 + (void)installIntoConfiguration:(WKWebViewConfiguration *)cfg;
++ (void)pruneDOMsInDir:(NSString *)dir keep:(NSUInteger)keep;
++ (NSString *)coreJS;
++ (void)grabIn:(WKWebView *)wv;
 @end
 
 #pragma mark - 消息处理
@@ -72,8 +75,10 @@ static char kInstalledKey;
             if (stem.length < 2) continue;
             NSString *key = [NSString stringWithFormat:@"%lu", (unsigned long)[stem hash]];
             @synchronized (gAnswered) {
-                if ([gAnswered containsObject:key]) continue;
-                [gAnswered addObject:key];
+                NSNumber *ts = gAnswered[key];
+                NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+                if (ts && now - ts.doubleValue < 300) continue;   // 5 分钟内不重复答同一题
+                gAnswered[key] = @(now);
             }
             double delay = cfg.startDelay + i * cfg.gapDelay;
             i++;
@@ -99,6 +104,7 @@ static char kInstalledKey;
         NSString *path = [dir stringByAppendingPathComponent:name];
         [html writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
         CXLOG(@"DOM 已保存 %@ (%lu bytes)", path, (unsigned long)html.length);
+        [CXWeb pruneDOMsInDir:dir keep:3];
         [[CXHUD shared] setStatus:@"已存DOM"];
     }
 }
@@ -112,7 +118,7 @@ static char kInstalledKey;
 + (void)start {
     gWebViews = [NSHashTable weakObjectsHashTable];
     gExamWebViews = [NSHashTable weakObjectsHashTable];
-    gAnswered = [NSMutableSet set];
+    gAnswered = [NSMutableDictionary dictionary];
 
     BOOL a = CXSwizzleInstance([WKWebView class],
                                @selector(initWithFrame:configuration:),
@@ -147,6 +153,19 @@ static char kInstalledKey;
                                               forMainFrameOnly:NO];
     [ucc addUserScript:script];
     CXLOG(@"已安装注入脚本 %lu bytes", (unsigned long)js.length);
+}
+
++ (void)pruneDOMsInDir:(NSString *)dir keep:(NSUInteger)keep {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableArray *files = [NSMutableArray array];
+    for (NSString *f in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+        if ([f hasPrefix:@"cx-dom-"] && [f hasSuffix:@".html"]) [files addObject:f];
+    }
+    [files sortUsingComparator:^NSComparisonResult(NSString *a, NSString *b) { return [b compare:a]; }];
+    if (files.count <= keep) return;
+    for (NSUInteger i = keep; i < files.count; i++) {
+        [fm removeItemAtPath:[dir stringByAppendingPathComponent:files[i]] error:nil];
+    }
 }
 
 + (NSString *)coreJS {
@@ -191,6 +210,7 @@ static char kInstalledKey;
         [[CXHUD shared] setStatus:@"无WebView"];
         return;
     }
+    @synchronized (gAnswered) { [gAnswered removeAllObjects]; }
     CXLOG(@"手动触发：webview %lu 个", (unsigned long)list.count);
     NSTimeInterval before = gLastMsgAt;
     [[CXHUD shared] setStatus:@"抓题中"];
