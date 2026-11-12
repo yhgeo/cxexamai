@@ -42,7 +42,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v1.0.${GITHUB_RUN_NUMBER}"
+          VER=$(grep -o 'CX_VERSION @"[0-9.]*"' src/CXCommon.h | grep -o '[0-9][0-9.]*')
+          TAG="v${VER}-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" CXExamAI.dylib \
             --repo "$GITHUB_REPOSITORY" \
             --title "CXExamAI ${TAG}" \
