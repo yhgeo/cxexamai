@@ -123,7 +123,7 @@ static NSString *const kSystemPrompt =
     if (cached) {
         CXLOG(@"命中缓存，直接回填");
         dispatch_async(dispatch_get_main_queue(), ^{
-            [[CXHUD shared] showAnswer:cached question:stem source:@"缓存"];
+            [[CXHUD shared] showAnswer:cached question:stem source:@"内存缓存"];
             [self fill:cached question:question webView:webView frame:frame];
         });
         return;
@@ -395,6 +395,11 @@ static NSString *const kSystemPrompt =
 
 - (void)fill:(NSDictionary *)ans question:(NSDictionary *)q webView:(WKWebView *)wv frame:(WKFrameInfo *)frame {
     if (!wv) return;
+    if (![CXConfig shared].autoFill) {
+        CXLOG(@"实验性自动填答未开启，仅展示答案");
+        [[CXHUD shared] setStatus:@"仅展示 · 自动填答未开启"];
+        return;
+    }
     NSNumber *idx = q[@"idx"] ?: @0;
     NSData *ld = [NSJSONSerialization dataWithJSONObject:ans[@"answer"] ?: @[] options:0 error:nil];
     NSData *td = [NSJSONSerialization dataWithJSONObject:@[ans[@"text"] ?: @""] options:0 error:nil];

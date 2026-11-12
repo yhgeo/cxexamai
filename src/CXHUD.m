@@ -70,7 +70,7 @@
     UIStackView *_baseStack, *_modelStack, *_logStack, *_historyStack;
 
     UITextField *_base, *_model, *_key;
-    UISwitch *_auto, *_guard, *_hud, *_vision, *_bankOn, *_forceWrite;
+    UISwitch *_auto, *_guard, *_hud, *_vision, *_bankOn, *_forceWrite, *_autoFill;
     UIScrollView *_scroll;
     UITextField *_bankURL, *_bankToken;
     UITextView *_bankJSONView;
@@ -96,7 +96,7 @@
 
     CXConfig *c = [CXConfig shared];
 
-    _segment = [[UISegmentedControl alloc] initWithItems:@[@"基础", @"模型", @"日志", @"历史"]];
+    _segment = [[UISegmentedControl alloc] initWithItems:@[@"基础", @"模型", @"日志", @"缓存"]];
     _segment.selectedSegmentIndex = 0;
     [_segment addTarget:self action:@selector(segmentChanged) forControlEvents:UIControlEventValueChanged];
     _segment.translatesAutoresizingMaskIntoConstraints = NO;
@@ -138,6 +138,8 @@
     _hud = [UISwitch new]; _hud.on = c.hudEnabled;
     _vision = [UISwitch new]; _vision.on = c.visionEnabled;
 
+    _autoFill = [UISwitch new];
+    _autoFill.on = c.autoFill;
     _forceWrite = [UISwitch new];
     _forceWrite.on = c.forceWrite;
 
@@ -152,7 +154,8 @@
                         [self row:@"考试页防检测" control:_guard],
                         [self row:@"显示悬浮球" control:_hud],
                         [self row:@"识别题目图片（需视觉模型）" control:_vision],
-                        [self row:@"实验性：点击失败时直接写答案域" control:_forceWrite],
+                        [self row:@"实验性：自动填答（点选项/填文本）" control:_autoFill],
+                        [self row:@"实验性：点击失败时写答案域" control:_forceWrite],
                         _delayLabel, _delay,
                         [self button:@"重置悬浮窗位置与缩放" action:@selector(resetPanelPos)],
                         [self label:@"面板可拖动、可双指缩放，超出屏幕会自动回弹。"]] ) {
@@ -235,9 +238,9 @@
     _historyHeight = [_historyTable.heightAnchor constraintEqualToConstant:380];
     _historyHeight.active = YES;
 
-    for (UIView *v in @[[self label:@"最近 100 条作答记录，点击可复制。"],
+    for (UIView *v in @[[self label:@"已缓存题目（最近 100 条），点击可复制。"],
                         _historyTable,
-                        [self button:@"清空历史" action:@selector(clearHistory)]]) {
+                        [self button:@"清空缓存" action:@selector(clearHistory)]]) {
         [_historyStack addArrangedSubview:v];
     }
 
@@ -390,7 +393,7 @@
     NSDictionary *item = _historyItems[indexPath.row];
     NSString *text = [NSString stringWithFormat:@"%@\n答案：%@", item[@"stem"] ?: @"", item[@"ans"] ?: @""];
     [UIPasteboard generalPasteboard].string = text;
-    [[CXHUD shared] setStatus:@"已复制历史题"];
+    [[CXHUD shared] setStatus:@"已复制缓存题"];
 }
 
 - (void)clearHistory {
@@ -449,6 +452,7 @@
     c.bankURL = _bankURL.text ?: @"";
     c.bankToken = _bankToken.text ?: @"";
     c.forceWrite = _forceWrite.isOn;
+    c.autoFill = _autoFill.isOn;
     c.bankJSON = _bankJSONView.text ?: @"";
     c.startDelay = _delay.value;
     [c save];

@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-#define CX_VERSION @"1.6.1"
+#define CX_VERSION @"1.6.2"
 #define CXLOG(...) [CXLog write:__VA_ARGS__]
 
 @interface CXLog : NSObject
@@ -27,6 +27,7 @@
 @property (nonatomic, copy) NSString *bankToken;
 @property (nonatomic, copy) NSString *bankJSON;   // OCS 题库配置（JSON 数组）
 @property (nonatomic, assign) BOOL forceWrite;    // 实验性：点击失败时直接写答案域
+@property (nonatomic, assign) BOOL autoFill;      // 实验性：自动填答总开关
 + (instancetype)shared;
 - (void)reload;
 - (void)save;

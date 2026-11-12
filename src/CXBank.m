@@ -32,7 +32,7 @@
     return nil;
 }
 
-+ (NSDictionary *)normalize:(id)obj type:(NSString *)type {
++ (NSDictionary *)normalize:(id)obj type:(NSString *)type options:(NSArray *)options {
     NSString *s = nil;
     if ([obj isKindOfClass:[NSString class]]) {
         s = obj;
@@ -64,6 +64,26 @@
     NSArray *uniq = [[NSSet setWithArray:letters] allObjects];
     uniq = [uniq sortedArrayUsingSelector:@selector(compare:)];
     if (uniq.count) return @{@"answer": uniq, @"text": @""};
+
+    // 答案给的是文字（如“德国古典哲学”“两点论”），用选项文本反查字母
+    if (options.count) {
+        NSString *flat = [[trim lowercaseString] stringByReplacingOccurrencesOfString:@" " withString:@""];
+        NSMutableArray *byText = [NSMutableArray array];
+        for (NSDictionary *o in options) {
+            NSString *k = o[@"k"] ?: @"";
+            NSString *t = o[@"t"] ?: @"";
+            if (k.length == 0 || t.length == 0) continue;
+            NSString *ft = [[t lowercaseString] stringByReplacingOccurrencesOfString:@" " withString:@""];
+            if (ft.length == 0) continue;
+            if ([flat containsString:ft] || [ft containsString:flat]) [byText addObject:k];
+        }
+        if (byText.count) {
+            NSArray *u2 = [[NSSet setWithArray:byText] allObjects];
+            u2 = [u2 sortedArrayUsingSelector:@selector(compare:)];
+            return @{@"answer": u2, @"text": @""};
+        }
+    }
+
     if ([type isEqualToString:@"blank"]) return @{@"answer": @[], @"text": trim};
     return nil;
 }
@@ -89,7 +109,7 @@
     NSDictionary *local = [[CXHistory shared] answerForStem:stem];
     if (local && ([(NSArray *)local[@"answer"] count] || [(NSString *)local[@"text"] length])) {
         CXLOG(@"题库：本地命中");
-        done(local, @"历史");
+        done(local, @"本地缓存");
         return;
     }
 
@@ -139,6 +159,8 @@
             done(nil);
             return;
         }
+        NSString *raw = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        CXLOG(@"题库原始返回: %@", [raw substringToIndex:MIN((NSUInteger)320, raw.length)]);
         id root = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
         if (![root isKindOfClass:[NSDictionary class]]) { done(nil); return; }
         id code = root[@"code"];
@@ -150,8 +172,9 @@
             done(nil);
             return;
         }
-        NSDictionary *ans = [self normalize:root[@"data"] type:type];
-        if (!ans) ans = [self normalize:root type:type];
+        NSDictionary *ans = [self normalize:root[@"data"] type:type options:options];
+        if (!ans) ans = [self normalize:root[@"answer"] type:type options:options];
+        if (!ans) ans = [self normalize:root type:type options:options];
         CXLOG(@"题库命中 %@", ans ?: @"（无法解析）");
         done(ans);
     }] resume];
@@ -175,10 +198,10 @@
         NSDictionary *ans = nil;
         if ([root isKindOfClass:[NSDictionary class]]) {
             id payload = root[@"data"] ?: root[@"result"] ?: root[@"answer"];
-            ans = [self normalize:payload type:type];
-            if (!ans) ans = [self normalize:root type:type];
+            ans = [self normalize:payload type:type options:@[]];
+            if (!ans) ans = [self normalize:root type:type options:@[]];
         } else {
-            ans = [self normalize:root type:type];
+            ans = [self normalize:root type:type options:@[]];
         }
         CXLOG(@"题库返回 %@", ans ?: @"未命中");
         done(ans);
