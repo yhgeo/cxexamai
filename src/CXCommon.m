@@ -101,6 +101,9 @@ static NSDateFormatter *gFmt;
     self.gapDelay = [d objectForKey:@"cx_gap"] ? [d doubleForKey:@"cx_gap"] : 2.0;
     id visionObj = [d objectForKey:@"cx_vision"];
     self.visionEnabled = visionObj ? [d boolForKey:@"cx_vision"] : YES;
+    self.bankEnabled = [d boolForKey:@"cx_bank_on"];
+    self.bankURL = [d stringForKey:@"cx_bank_url"] ?: @"";
+    self.bankToken = [d stringForKey:@"cx_bank_token"] ?: @"";
 }
 
 - (void)save {
@@ -114,6 +117,9 @@ static NSDateFormatter *gFmt;
     [d setDouble:self.startDelay forKey:@"cx_startDelay"];
     [d setDouble:self.gapDelay forKey:@"cx_gap"];
     [d setBool:self.visionEnabled forKey:@"cx_vision"];
+    [d setBool:self.bankEnabled forKey:@"cx_bank_on"];
+    [d setObject:self.bankURL ?: @"" forKey:@"cx_bank_url"];
+    [d setObject:self.bankToken ?: @"" forKey:@"cx_bank_token"];
     [d synchronize];
 }
 

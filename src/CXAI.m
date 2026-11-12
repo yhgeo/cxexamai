@@ -2,6 +2,7 @@
 #import "CXCommon.h"
 #import "CXHUD.h"
 #import "CXHistory.h"
+#import "CXBank.h"
 
 static NSString *const kSystemPrompt =
 @"你是中国高校在线考试的答题引擎。只输出一个 JSON 对象，不输出解释、不输出 Markdown 代码块。\n"
@@ -92,6 +93,26 @@ static NSString *const kSystemPrompt =
 #pragma mark - 求解
 
 - (void)solve:(NSDictionary *)question inWebView:(WKWebView *)webView frame:(WKFrameInfo *)frame {
+    NSString *stem = question[@"stem"];
+    if (stem.length < 2) return;
+    __weak typeof(self) weakSelf = self;
+    [CXBank query:stem type:question[@"type"] ?: @"single" completion:^(NSDictionary *bankAns) {
+        CXAI *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (bankAns && ([(NSArray *)bankAns[@"answer"] count] || [(NSString *)bankAns[@"text"] length])) {
+            CXLOG(@"题库命中 %@", bankAns);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [[CXHUD shared] showAnswer:bankAns question:stem];
+                [strongSelf fill:bankAns question:question webView:webView frame:frame];
+                [[CXHistory shared] addStem:stem type:question[@"type"] ?: @"" answer:bankAns[@"answer"] ?: @[] text:bankAns[@"text"] ?: @""];
+            });
+            return;
+        }
+        [strongSelf solveRemote:question inWebView:webView frame:frame];
+    }];
+}
+
+- (void)solveRemote:(NSDictionary *)question inWebView:(WKWebView *)webView frame:(WKFrameInfo *)frame {
     if (![question isKindOfClass:[NSDictionary class]]) return;
     NSString *stem = question[@"stem"];
     if (stem.length < 2) return;
@@ -197,7 +218,7 @@ static NSString *const kSystemPrompt =
     NSDictionary *body = @{@"model": [CXConfig shared].model ?: @"deepseek-chat",
                            @"messages": messages,
                            @"temperature": @0.1,
-                           @"max_tokens": @3000,
+                           @"max_tokens": @4096,
                            @"stream": @NO};
     NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
@@ -262,6 +283,13 @@ static NSString *const kSystemPrompt =
 
         NSDictionary *ans = [strongSelf parseAnswer:content];
         CXLOG(@"答案 %@", ans);
+
+        // 带图请求拿到空答案：降级纯文本再试一次
+        if ([(NSArray *)ans[@"answer"] count] == 0 && [(NSString *)ans[@"text"] length] == 0 && hasImage) {
+            CXLOG(@"空答案且带图，降级纯文本重试");
+            [strongSelf requestPayload:payload images:@[] question:question webView:weakWV frame:frame key:key];
+            return;
+        }
         [[CXHistory shared] addStem:question[@"stem"] ?: @""
                                type:payload[@"type"] ?: @""
                              answer:ans[@"answer"] ?: @[]

@@ -50,7 +50,9 @@ static const NSUInteger kMaxItems = 100;
     NSDictionary *item = @{@"t": @([[NSDate date] timeIntervalSince1970]),
                            @"type": type ?: @"",
                            @"stem": stem,
-                           @"ans": ans.length ? ans : @"（空）"};
+                           @"ans": ans.length ? ans : @"（空）",
+                           @"a": answer ?: @[],
+                           @"x": text ?: @""};
     [_items insertObject:item atIndex:0];
     while (_items.count > kMaxItems) [_items removeLastObject];
     [self save];
@@ -63,6 +65,24 @@ static const NSUInteger kMaxItems = 100;
     NSArray *copy = [_items copy];
     [_lock unlock];
     return copy;
+}
+
+- (NSDictionary *)answerForStem:(NSString *)stem {
+    if (stem.length == 0) return nil;
+    [_lock lock];
+    if (!_items) [self load];
+    NSDictionary *hit = nil;
+    for (NSDictionary *item in _items) {
+        if ([item[@"stem"] isEqualToString:stem]) { hit = item; break; }
+    }
+    [_lock unlock];
+    if (!hit) return nil;
+    NSArray *a = hit[@"a"];
+    NSString *x = hit[@"x"];
+    if (![a isKindOfClass:[NSArray class]]) a = @[];
+    if (![x isKindOfClass:[NSString class]]) x = @"";
+    if (a.count == 0 && x.length == 0) return nil;
+    return @{@"answer": a, @"text": x};
 }
 
 - (void)clear {

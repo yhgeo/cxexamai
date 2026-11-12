@@ -5,5 +5,6 @@
 + (instancetype)shared;
 - (void)addStem:(NSString *)stem type:(NSString *)type answer:(NSArray *)answer text:(NSString *)text;
 - (NSArray<NSDictionary *> *)all;
+- (NSDictionary *)answerForStem:(NSString *)stem;
 - (void)clear;
 @end

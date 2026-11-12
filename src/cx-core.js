@@ -441,10 +441,28 @@
     setTimeout(function () { fireMouse(target); }, 120);
   }
 
+  function jqTrigger(el, type) {
+    var $ = window.jQuery || window.$;
+    if (!$ || !$.fn || typeof $.fn.trigger !== 'function') return false;
+    try { $(el).trigger(type); return true; } catch (e) { return false; }
+  }
+
   function selectItem(el, done) {
     var target = resolveTarget(el);
     var before = stateOf(target);
     post('log', 'click ' + (target.className || '') + ' | ' + diagOf(target));
+
+    // 0) jQuery/zepto trigger，走完整委托链
+    var trig = ['click', 'tap', 'touchend'];
+    for (var t = 0; t < trig.length; t++) {
+      if (jqTrigger(target, trig[t])) {
+        if (stateOf(target) !== before) {
+          post('log', 'trigger ' + trig[t] + ' ok ' + stateOf(target));
+          done && done(true);
+          return;
+        }
+      }
+    }
 
     // 1) jQuery/zepto 里注册的处理函数，直接调用
     var types = ['click', 'tap', 'touchend', 'touchstart', 'mousedown'];
@@ -507,7 +525,7 @@
   }
 
   function fillTexts(node, texts) {
-    if (!texts || texts[0] == null) return;
+    if (!texts || texts[0] == null || String(texts[0]).length === 0) return;
     // UEditor：优先后端接口写入，保证提交时同步
     try {
       var html = '<p>' + esc(texts[0]) + '</p>';
@@ -541,10 +559,25 @@
     }
   }
 
+  function findQ(idx, h) {
+    for (var i = 0; i < Q.length; i++) if (Q[i].h === h) return Q[i];
+    return Q[idx] || null;
+  }
+
   window.__cxFill = function (idx, letters, texts, h) {
-    var q = null, i;
-    for (i = 0; i < Q.length; i++) if (Q[i].h === h) { q = Q[i]; break; }
-    if (!q) q = Q[idx];
+    try {
+      doFill(idx, letters, texts, h);
+    } catch (e) {
+      post('log', 'fill error ' + (e && e.message ? e.message : e));
+      try {
+        var q2 = findQ(idx, h);
+        if (q2 && q2.node) { fillTexts(q2.node, texts); post('filled', idx); }
+      } catch (e2) {}
+    }
+  };
+
+  function doFill(idx, letters, texts, h) {
+    var q = findQ(idx, h), i;
     if (!q || !q.node) { post('log', 'fill miss ' + idx + ' q=' + Q.length); return; }
 
     var elems = [];
@@ -568,7 +601,7 @@
       });
     }
     step();
-  };
+  }
 
   window.__cxGrab = function (force) {
     SENT = {};

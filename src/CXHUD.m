@@ -16,6 +16,49 @@
 }
 @end
 
+#pragma mark - 历史 Cell
+
+@interface CXHistoryCell : UITableViewCell
+@property (nonatomic, strong) UILabel *stemLabel;
+@property (nonatomic, strong) UILabel *ansLabel;
+@property (nonatomic, strong) UILabel *metaLabel;
+@end
+
+@implementation CXHistoryCell
+
+- (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
+    self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
+    if (self) {
+        _stemLabel = [UILabel new];
+        _stemLabel.font = [UIFont systemFontOfSize:13];
+        _stemLabel.numberOfLines = 2;
+
+        _ansLabel = [UILabel new];
+        _ansLabel.font = [UIFont boldSystemFontOfSize:15];
+        _ansLabel.textColor = [UIColor systemBlueColor];
+        _ansLabel.numberOfLines = 1;
+
+        _metaLabel = [UILabel new];
+        _metaLabel.font = [UIFont systemFontOfSize:11];
+        _metaLabel.textColor = [UIColor secondaryLabelColor];
+
+        UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[_stemLabel, _ansLabel, _metaLabel]];
+        stack.axis = UILayoutConstraintAxisVertical;
+        stack.spacing = 3;
+        stack.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.contentView addSubview:stack];
+        [NSLayoutConstraint activateConstraints:@[
+            [stack.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:8],
+            [stack.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:16],
+            [stack.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-16],
+            [stack.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-8],
+        ]];
+    }
+    return self;
+}
+
+@end
+
 #pragma mark - 设置页
 
 @interface CXSettingsViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
@@ -26,7 +69,8 @@
     UIStackView *_baseStack, *_modelStack, *_logStack, *_historyStack;
 
     UITextField *_base, *_model, *_key;
-    UISwitch *_auto, *_guard, *_hud, *_vision;
+    UISwitch *_auto, *_guard, *_hud, *_vision, *_bankOn;
+    UITextField *_bankURL, *_bankToken;
     UISlider *_delay;
     UILabel *_delayLabel;
     UILabel *_testLabel;
@@ -118,10 +162,18 @@
     _testLabel.textColor = [UIColor secondaryLabelColor];
     _testLabel.numberOfLines = 0;
 
+    _bankOn = [UISwitch new];
+    _bankOn.on = c.bankEnabled;
+    _bankURL = [self field:@"题库接口地址（OCS 风格 GET）" value:c.bankURL];
+    _bankToken = [self field:@"题库 Token（可选）" value:c.bankToken];
+
     for (UIView *v in @[_base, _model, _key,
                         [self button:@"测试接口连通" action:@selector(testAPI)],
                         _testLabel,
-                        [self label:@"图片识别会按 OpenAI 视觉格式发送 base64 图片；接口不支持时自动降级为纯文本。"]] ) {
+                        [self label:@"题库（优先于 AI）"],
+                        [self row:@"启用题库" control:_bankOn],
+                        _bankURL, _bankToken,
+                        [self label:@"请求格式：GET {地址}?question=题干&type=0/1/2/3&token=xxx；未命中自动转 AI。图片识别会按视觉格式发送 base64，接口不支持时降级纯文本。"]] ) {
         [_modelStack addArrangedSubview:v];
     }
 
@@ -159,7 +211,7 @@
     _historyTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     _historyTable.dataSource = self;
     _historyTable.delegate = self;
-    _historyTable.rowHeight = 66;
+    _historyTable.rowHeight = 88;
     _historyTable.layer.cornerRadius = 10;
     [_historyTable.heightAnchor constraintEqualToConstant:380].active = YES;
 
@@ -253,26 +305,30 @@
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     static NSString *cellID = @"cxHistoryCell";
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cellID];
-    if (!cell) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:cellID];
-        cell.textLabel.numberOfLines = 2;
-        cell.textLabel.font = [UIFont systemFontOfSize:13];
-        cell.detailTextLabel.font = [UIFont systemFontOfSize:12];
-        cell.detailTextLabel.textColor = [UIColor secondaryLabelColor];
-        cell.detailTextLabel.numberOfLines = 2;
-    }
+    CXHistoryCell *cell = [tableView dequeueReusableCellWithIdentifier:cellID];
+    if (!cell) cell = [[CXHistoryCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:cellID];
+
     NSDictionary *item = _historyItems[indexPath.row];
     NSString *stem = item[@"stem"] ?: @"";
-    cell.textLabel.text = stem.length > 60 ? [[stem substringToIndex:60] stringByAppendingString:@"…"] : stem;
+    cell.stemLabel.text = stem.length > 70 ? [[stem substringToIndex:70] stringByAppendingString:@"…"] : stem;
+
+    NSString *ans = item[@"ans"] ?: @"";
+    cell.ansLabel.text = [NSString stringWithFormat:@"答案  %@", ans.length ? ans : @"（空）"];
+
     NSTimeInterval ts = [item[@"t"] doubleValue];
     NSDateFormatter *f = [NSDateFormatter new];
     f.dateFormat = @"MM-dd HH:mm";
-    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ · %@ · %@",
-                                 item[@"type"] ?: @"",
-                                 item[@"ans"] ?: @"",
-                                 [f stringFromDate:[NSDate dateWithTimeIntervalSince1970:ts]]];
+    cell.metaLabel.text = [NSString stringWithFormat:@"%@ · %@",
+                           [self cnType:item[@"type"] ?: @""],
+                           [f stringFromDate:[NSDate dateWithTimeIntervalSince1970:ts]]];
     return cell;
+}
+
+- (NSString *)cnType:(NSString *)t {
+    if ([t isEqualToString:@"multi"]) return @"多选题";
+    if ([t isEqualToString:@"judge"]) return @"判断题";
+    if ([t isEqualToString:@"blank"]) return @"填空/简答";
+    return @"单选题";
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -328,6 +384,9 @@
     c.guardEnabled = _guard.isOn;
     c.hudEnabled = _hud.isOn;
     c.visionEnabled = _vision.isOn;
+    c.bankEnabled = _bankOn.isOn;
+    c.bankURL = _bankURL.text ?: @"";
+    c.bankToken = _bankToken.text ?: @"";
     c.startDelay = _delay.value;
     [c save];
     CXLOG(@"设置已保存 model=%@ keyLen=%lu vision=%d", c.model, (unsigned long)c.apiKey.length, c.visionEnabled);
