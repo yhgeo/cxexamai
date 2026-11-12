@@ -10,7 +10,7 @@ static void CXEntry(void) {
         NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
         if (![bid isEqualToString:@"com.ssreader.ChaoXingStudy"]) return;
 
-        CXLOG(@"======== CXExamAI 1.0 注入 (%@) ========", bid);
+        CXLOG(@"======== CXExamAI %@ 注入 (%@) ========", CX_VERSION, bid);
         [CXWeb start];
         [CXGuard start];
 
