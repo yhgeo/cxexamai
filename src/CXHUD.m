@@ -199,7 +199,9 @@
     _testLabel.text = @"测试中…";
     __weak typeof(self) weakSelf = self;
     [[CXAI shared] testConnection:^(BOOL ok, NSString *msg) {
-        weakSelf->_testLabel.text = [NSString stringWithFormat:@"%@ %@", ok ? @"成功" : @"失败", msg ?: @""];
+        CXSettingsViewController *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf->_testLabel.text = [NSString stringWithFormat:@"%@ %@", ok ? @"成功" : @"失败", msg ?: @""];
     }];
 }
 
