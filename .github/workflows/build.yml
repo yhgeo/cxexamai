@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -33,9 +36,14 @@ jobs:
           brew install ldid >/dev/null 2>&1 || true
           ldid -S CXExamAI.dylib || echo "ldid 失败，TrollFools 注入时会重新签名"
 
-      - name: 上传产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: CXExamAI-dylib
-          path: CXExamAI.dylib
-          if-no-files-found: error
+      - name: 发布 Release（避开 artifact 配额）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.0.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" CXExamAI.dylib \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "CXExamAI ${TAG}" \
+            --notes "commit ${GITHUB_SHA:0:7} / $(date -u +%Y-%m-%dT%H:%MZ)"
+          echo "下载：https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/CXExamAI.dylib"
+
