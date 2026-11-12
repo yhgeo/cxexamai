@@ -26,7 +26,7 @@
     UISlider *_delay;
     UILabel *_delayLabel;
     UILabel *_testLabel;
-    UILabel *_pathLabel;
+    UITextView *_logView;
 }
 
 - (void)viewDidLoad {
@@ -60,50 +60,68 @@
     _key = [self field:@"API Key" value:c.apiKey];
     _key.secureTextEntry = YES;
 
-    _auto = [UISwitch new];
-    _auto.on = c.autoAnswer;
-    _guard = [UISwitch new];
-    _guard.on = c.guardEnabled;
-    _hud = [UISwitch new];
-    _hud.on = c.hudEnabled;
+    _auto = [UISwitch new]; _auto.on = c.autoAnswer;
+    _guard = [UISwitch new]; _guard.on = c.guardEnabled;
+    _hud = [UISwitch new]; _hud.on = c.hudEnabled;
 
     _delayLabel = [UILabel new];
     _delayLabel.font = [UIFont systemFontOfSize:14];
     _delayLabel.text = [NSString stringWithFormat:@"开始作答延迟：%.1f 秒", c.startDelay];
     _delay = [UISlider new];
-    _delay.minimumValue = 0;
-    _delay.maximumValue = 5;
-    _delay.value = c.startDelay;
+    _delay.minimumValue = 0; _delay.maximumValue = 5; _delay.value = c.startDelay;
     [_delay addTarget:self action:@selector(delayChanged) forControlEvents:UIControlEventValueChanged];
 
     UIButton *test = [self button:@"测试接口连通" action:@selector(testAPI)];
-    UIButton *share = [self button:@"导出日志（分享到微信/QQ）" action:@selector(shareLog)];
 
     _testLabel = [UILabel new];
     _testLabel.font = [UIFont systemFontOfSize:13];
     _testLabel.textColor = [UIColor secondaryLabelColor];
     _testLabel.numberOfLines = 0;
 
-    _pathLabel = [UILabel new];
-    _pathLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
-    _pathLabel.textColor = [UIColor secondaryLabelColor];
-    _pathLabel.numberOfLines = 0;
-    _pathLabel.text = [NSString stringWithFormat:@"日志完整路径（可长按复制）：\n%@", [CXLog path]];
+    _logView = [UITextView new];
+    _logView.editable = NO;
+    _logView.selectable = YES;
+    _logView.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    _logView.layer.cornerRadius = 10;
+    _logView.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
+    _logView.textColor = [UIColor labelColor];
+    _logView.textContainerInset = UIEdgeInsetsMake(8, 8, 8, 8);
+    [_logView.heightAnchor constraintEqualToConstant:220].active = YES;
+    _logView.text = [CXLog tail:60];
+
+    UIButton *refresh = [self button:@"刷新日志" action:@selector(refreshLog)];
+    UIButton *share = [self button:@"导出日志 + DOM 快照" action:@selector(shareLog)];
+
+    UILabel *logTitle = [UILabel new];
+    logTitle.text = @"最近日志（60 行）";
+    logTitle.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+    logTitle.textColor = [UIColor secondaryLabelColor];
+
+    UILabel *pathLabel = [UILabel new];
+    pathLabel.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
+    pathLabel.textColor = [UIColor secondaryLabelColor];
+    pathLabel.numberOfLines = 2;
+    pathLabel.text = [CXLog path];
 
     UILabel *tip = [UILabel new];
     tip.font = [UIFont systemFontOfSize:12];
     tip.textColor = [UIColor secondaryLabelColor];
     tip.numberOfLines = 0;
-    tip.text = @"单击悬浮球展开答案，双击立即重答，长按打开本页。\n抓不到题时会把页面存成 cx-dom-*.html，同目录下。";
+    tip.text = @"单击悬浮球展开答案，双击立即重答，长按打开本页。\n答案会先点真实选项触发选中，再回填文本题。";
 
     NSArray *views = @[_base, _model, _key,
                        [self rowWithTitle:@"自动答题" control:_auto],
                        [self rowWithTitle:@"考试页防检测" control:_guard],
                        [self rowWithTitle:@"显示悬浮球" control:_hud],
                        _delayLabel, _delay, test, _testLabel,
-                       [self rowWithTitle:@"日志" control:[UIView new]],
-                       _pathLabel, share, tip];
+                       logTitle, _logView, refresh, share, pathLabel, tip];
     for (UIView *v in views) [stack addArrangedSubview:v];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    _logView.text = [CXLog tail:60];
+    [_logView setContentOffset:CGPointZero animated:NO];
 }
 
 - (UIButton *)button:(NSString *)title action:(SEL)action {
@@ -149,6 +167,11 @@
     _delayLabel.text = [NSString stringWithFormat:@"开始作答延迟：%.1f 秒", _delay.value];
 }
 
+- (void)refreshLog {
+    _logView.text = [CXLog tail:60];
+    [_logView setContentOffset:CGPointZero animated:NO];
+}
+
 - (void)save {
     CXConfig *c = [CXConfig shared];
     c.baseURL = _base.text.length ? _base.text : @"https://api.deepseek.com";
@@ -190,7 +213,8 @@
         [items addObject:[NSURL fileURLWithPath:[dir stringByAppendingPathComponent:doms[i]]]];
     }
     if (items.count == 0) [items addObject:[NSString stringWithFormat:@"CXExamAI %@ 暂无日志", CX_VERSION]];
-    [items addObject:[NSString stringWithFormat:@"CXExamAI %@\n%@\n（日志 + 最近 %lu 个页面 DOM）", CX_VERSION, path, (unsigned long)MIN(doms.count, (NSUInteger)2)]];
+    [items addObject:[NSString stringWithFormat:@"CXExamAI %@\n%@", CX_VERSION, path]];
+
     UIActivityViewController *vc = [[UIActivityViewController alloc] initWithActivityItems:items applicationActivities:nil];
     if (vc.popoverPresentationController) {
         vc.popoverPresentationController.sourceView = self.view;
@@ -207,10 +231,12 @@
     CXHUDWindow *_window;
     UIView *_ball;
     UILabel *_ballLabel;
-    UIView *_panel;
+    UIVisualEffectView *_panel;
     UILabel *_qLabel;
-    UITextView *_aView;
+    UILabel *_bigLabel;
+    UILabel *_aTextLabel;
     UILabel *_hintLabel;
+    UIView *_answerBox;
     BOOL _panelShown;
     NSInteger _hideSeq;
 }
@@ -248,17 +274,16 @@
 - (void)buildBallInView:(UIView *)host {
     CGFloat w = host.bounds.size.width;
     if (w < 100) w = [UIScreen mainScreen].bounds.size.width;
-    _ball = [[UIView alloc] initWithFrame:CGRectMake(w - 58, 150, 46, 46)];
-    _ball.backgroundColor = [[UIColor systemBlueColor] colorWithAlphaComponent:0.35];
-    _ball.layer.cornerRadius = 23;
+    _ball = [[UIView alloc] initWithFrame:CGRectMake(w - 52, 150, 40, 40)];
+    _ball.backgroundColor = [[UIColor systemBlueColor] colorWithAlphaComponent:0.55];
+    _ball.layer.cornerRadius = 20;
     _ball.layer.borderWidth = 0.5;
     _ball.layer.borderColor = [UIColor whiteColor].CGColor;
-    _ball.alpha = 0.75;
 
     _ballLabel = [[UILabel alloc] initWithFrame:_ball.bounds];
     _ballLabel.text = @"AI";
     _ballLabel.textColor = [UIColor whiteColor];
-    _ballLabel.font = [UIFont boldSystemFontOfSize:13];
+    _ballLabel.font = [UIFont boldSystemFontOfSize:12];
     _ballLabel.textAlignment = NSTextAlignmentCenter;
     [_ball addSubview:_ballLabel];
     [host addSubview:_ball];
@@ -269,7 +294,7 @@
     dbl.numberOfTapsRequired = 2;
     [tap requireGestureRecognizerToFail:dbl];
     UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
-    press.minimumPressDuration = 0.8;
+    press.minimumPressDuration = 0.7;
 
     [_ball addGestureRecognizer:pan];
     [_ball addGestureRecognizer:tap];
@@ -278,68 +303,101 @@
 }
 
 - (void)buildPanelInView:(UIView *)host {
-    _panel = [UIView new];
-    _panel.backgroundColor = [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.96];
-    _panel.layer.cornerRadius = 14;
+    UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
+    _panel = [[UIVisualEffectView alloc] initWithEffect:effect];
+    _panel.layer.cornerRadius = 16;
     _panel.layer.borderWidth = 0.5;
-    _panel.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.15].CGColor;
+    _panel.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+    _panel.clipsToBounds = YES;
     _panel.hidden = YES;
     _panel.translatesAutoresizingMaskIntoConstraints = NO;
     [host addSubview:_panel];
 
-    _qLabel = [UILabel new];
+    UILabel *title = [[UILabel alloc] init];
+    title.text = @"CXExamAI";
+    title.textColor = [UIColor colorWithWhite:1 alpha:0.55];
+    title.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+
+    _hintLabel = [[UILabel alloc] init];
+    _hintLabel.textColor = [UIColor colorWithWhite:1 alpha:0.55];
+    _hintLabel.font = [UIFont systemFontOfSize:11];
+    _hintLabel.numberOfLines = 2;
+    _hintLabel.text = @"状态：待机 · 双击重答 · 长按设置";
+    _hintLabel.textAlignment = NSTextAlignmentRight;
+
+    UIStackView *head = [[UIStackView alloc] initWithArrangedSubviews:@[title, _hintLabel]];
+    head.axis = UILayoutConstraintAxisHorizontal;
+    head.distribution = UIStackViewDistributionEqualSpacing;
+    head.alignment = UIStackViewAlignmentCenter;
+
+    _qLabel = [[UILabel alloc] init];
     _qLabel.textColor = [UIColor whiteColor];
     _qLabel.font = [UIFont systemFontOfSize:13];
     _qLabel.numberOfLines = 3;
     _qLabel.text = @"等待抓题…";
 
-    _aView = [UITextView new];
-    _aView.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
-    _aView.layer.cornerRadius = 8;
-    _aView.editable = NO;
-    _aView.selectable = YES;
-    _aView.textColor = [UIColor whiteColor];
-    _aView.font = [UIFont systemFontOfSize:15];
-    _aView.text = @"";
-    [_aView.heightAnchor constraintEqualToConstant:132].active = YES;
+    _answerBox = [[UIView alloc] init];
+    _answerBox.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
+    _answerBox.layer.cornerRadius = 10;
 
-    _hintLabel = [UILabel new];
-    _hintLabel.textColor = [UIColor lightGrayColor];
-    _hintLabel.font = [UIFont systemFontOfSize:12];
-    _hintLabel.numberOfLines = 2;
-    _hintLabel.text = @"状态：待机 · 双击重答 · 长按设置";
+    _bigLabel = [[UILabel alloc] init];
+    _bigLabel.textColor = [UIColor systemBlueColor];
+    _bigLabel.font = [UIFont monospacedSystemFontOfSize:24 weight:UIFontWeightBold];
+    _bigLabel.numberOfLines = 1;
+    _bigLabel.text = @"";
+
+    _aTextLabel = [[UILabel alloc] init];
+    _aTextLabel.textColor = [UIColor colorWithWhite:1 alpha:0.8];
+    _aTextLabel.font = [UIFont systemFontOfSize:13];
+    _aTextLabel.numberOfLines = 3;
+    _aTextLabel.text = @"";
+
+    [_answerBox addSubview:_bigLabel];
+    [_answerBox addSubview:_aTextLabel];
+    _bigLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    _aTextLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [_bigLabel.topAnchor constraintEqualToAnchor:_answerBox.topAnchor constant:10],
+        [_bigLabel.leadingAnchor constraintEqualToAnchor:_answerBox.leadingAnchor constant:12],
+        [_bigLabel.trailingAnchor constraintEqualToAnchor:_answerBox.trailingAnchor constant:-12],
+        [_aTextLabel.topAnchor constraintEqualToAnchor:_bigLabel.bottomAnchor constant:4],
+        [_aTextLabel.leadingAnchor constraintEqualToAnchor:_answerBox.leadingAnchor constant:12],
+        [_aTextLabel.trailingAnchor constraintEqualToAnchor:_answerBox.trailingAnchor constant:-12],
+        [_aTextLabel.bottomAnchor constraintEqualToAnchor:_answerBox.bottomAnchor constant:-10],
+        [_answerBox.heightAnchor constraintGreaterThanOrEqualToConstant:76],
+    ]];
 
     UIButton *again = [UIButton buttonWithType:UIButtonTypeSystem];
     [again setTitle:@"重新作答" forState:UIControlStateNormal];
     [again addTarget:self action:@selector(triggerManual) forControlEvents:UIControlEventTouchUpInside];
 
+    UIButton *copy = [UIButton buttonWithType:UIButtonTypeSystem];
+    [copy setTitle:@"复制答案" forState:UIControlStateNormal];
+    [copy addTarget:self action:@selector(copyAnswer) forControlEvents:UIControlEventTouchUpInside];
+
     UIButton *settings = [UIButton buttonWithType:UIButtonTypeSystem];
     [settings setTitle:@"设置" forState:UIControlStateNormal];
     [settings addTarget:self action:@selector(openSettings) forControlEvents:UIControlEventTouchUpInside];
 
-    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-    [close setTitle:@"收起" forState:UIControlStateNormal];
-    [close addTarget:self action:@selector(handleTap) forControlEvents:UIControlEventTouchUpInside];
-
-    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[again, settings, close]];
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[again, copy, settings]];
     row.axis = UILayoutConstraintAxisHorizontal;
     row.distribution = UIStackViewDistributionFillEqually;
     [row.heightAnchor constraintEqualToConstant:34].active = YES;
 
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[_qLabel, _aView, _hintLabel, row]];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[head, _qLabel, _answerBox, row]];
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 10;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [_panel addSubview:stack];
+    [_panel.contentView addSubview:stack];
 
     [NSLayoutConstraint activateConstraints:@[
         [_panel.leadingAnchor constraintEqualToAnchor:host.leadingAnchor constant:16],
         [_panel.trailingAnchor constraintEqualToAnchor:host.trailingAnchor constant:-16],
         [_panel.bottomAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.bottomAnchor constant:-12],
-        [stack.topAnchor constraintEqualToAnchor:_panel.topAnchor constant:14],
-        [stack.leadingAnchor constraintEqualToAnchor:_panel.leadingAnchor constant:14],
-        [stack.trailingAnchor constraintEqualToAnchor:_panel.trailingAnchor constant:-14],
-        [stack.bottomAnchor constraintEqualToAnchor:_panel.bottomAnchor constant:-12],
+        [stack.topAnchor constraintEqualToAnchor:_panel.contentView.topAnchor constant:14],
+        [stack.leadingAnchor constraintEqualToAnchor:_panel.contentView.leadingAnchor constant:14],
+        [stack.trailingAnchor constraintEqualToAnchor:_panel.contentView.trailingAnchor constant:-14],
+        [stack.bottomAnchor constraintEqualToAnchor:_panel.contentView.bottomAnchor constant:-12],
     ]];
 }
 
@@ -368,7 +426,15 @@
     _panel.hidden = NO;
     _panelShown = YES;
     _qLabel.text = @"正在重新抓题…";
-    _aView.text = @"";
+    _bigLabel.text = @"";
+    _aTextLabel.text = @"";
+}
+
+- (void)copyAnswer {
+    NSString *text = [NSString stringWithFormat:@"%@ %@", _bigLabel.text ?: @"", _aTextLabel.text ?: @""];
+    if (text.length == 0) return;
+    [UIPasteboard generalPasteboard].string = text;
+    [[CXHUD shared] setStatus:@"已复制答案"];
 }
 
 - (void)openSettings {
@@ -391,18 +457,16 @@
 - (void)setStatus:(NSString *)status {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!self->_hintLabel) return;
-        // 球上只保留 AI 两个字，详细状态写到面板里
-        self->_ballLabel.text = @"AI";
-        self->_hintLabel.text = [NSString stringWithFormat:@"状态：%@", status ?: @""];
+        self->_hintLabel.text = [NSString stringWithFormat:@"%@", status ?: @""];
         BOOL bad = [status rangeOfString:@"0题"].location != NSNotFound
                 || [status rangeOfString:@"失败"].location != NSNotFound
                 || [status rangeOfString:@"错误"].location != NSNotFound
                 || [status rangeOfString:@"无响应"].location != NSNotFound
                 || [status rangeOfString:@"未注入"].location != NSNotFound
                 || [status rangeOfString:@"无WebView"].location != NSNotFound
-                || [status rangeOfString:@"缺Key"].location != NSNotFound;
+                || [status rangeOfString:@"缺 Key"].location != NSNotFound;
         UIColor *c = bad ? [UIColor systemRedColor] : [UIColor systemBlueColor];
-        self->_ball.backgroundColor = [c colorWithAlphaComponent:0.45];
+        self->_ball.backgroundColor = [c colorWithAlphaComponent:0.55];
     });
 }
 
@@ -410,14 +474,10 @@
     dispatch_async(dispatch_get_main_queue(), ^{
         NSArray *letters = ans[@"answer"] ?: @[];
         NSString *text = ans[@"text"] ?: @"";
-        NSMutableString *s = [NSMutableString string];
-        if (letters.count) [s appendFormat:@"选项：%@\n", [letters componentsJoinedByString:@""]];
-        if (text.length) [s appendString:text];
-        if (s.length == 0) [s appendString:@"（空答案）"];
         self->_qLabel.text = stem.length ? stem : @"（未取到题干）";
-        self->_aView.text = s;
-        self->_hintLabel.text = @"双击重答 · 长按设置";
-        if ([UIScreen mainScreen].isCaptured) return;   // 录屏中不弹面板
+        self->_bigLabel.text = letters.count ? [letters componentsJoinedByString:@" "] : @"";
+        self->_aTextLabel.text = text.length ? text : (letters.count ? @"" : @"（空答案）");
+        if ([UIScreen mainScreen].isCaptured) return;
         self->_panel.hidden = NO;
         self->_panelShown = YES;
     });

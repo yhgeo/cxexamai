@@ -1,16 +1,25 @@
 #import "CXAI.h"
 #import "CXCommon.h"
 #import "CXHUD.h"
+#import <objc/runtime.h>
 
 static NSString *const kSystemPrompt =
-@"你是中国高校在线考试的答题助手。用户会给出一道题（题干+选项+题型）。"
-"你必须只输出一个 JSON 对象，不要输出 markdown 代码块、不要解释、不要多余文字。格式："
-"{\"answer\":[\"A\"],\"text\":\"填空或简答内容\",\"confidence\":0.0}"
-"规则：单选题 answer 只放 1 个选项字母；多选题放全部正确字母；判断题 A=正确、B=错误；"
-"填空题/简答题把完整答案写进 text，多个空用 ||| 分隔；answer 与 text 至少填一个。";
+@"你是中国高校在线考试的答题引擎。只输出一个 JSON 对象，不输出解释、不输出 Markdown 代码块。\n"
+"输出格式：{\"answer\":[\"A\"],\"text\":\"\",\"confidence\":0.9}\n"
+"题型规则：\n"
+"1. 单选题：answer 恰好 1 个字母。\n"
+"2. 多选题：answer 为 2~4 个字母，按字母升序，必须选全所有正确项。\n"
+"3. 判断题：answer 为 [\"A\"] 表示正确，[\"B\"] 表示错误。\n"
+"4. 填空题：answer 为空数组，text 为各空答案，多个空用 ||| 分隔，顺序与空位一致。\n"
+"5. 简答题/论述题：answer 为空数组，text 为完整答案，分点用 1. 2. 3.。\n"
+"6. 信息不足无法判断：{\"answer\":[],\"text\":\"\",\"confidence\":0}\n"
+"示例：输入「题型=多选题；题干=下列属于…的有；选项=A.甲 B.乙 C.丙 D.丁」，"
+"输出 {\"answer\":[\"A\",\"C\"],\"text\":\"\",\"confidence\":0.92}\n"
+"注意：题干或选项里的错别字按教材常见表述理解；不要臆造选项字母。";
 
 @interface CXAI ()
 @property (nonatomic, strong) NSMutableSet<NSString *> *inflight;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *cache;
 @property (nonatomic, strong) NSURLSession *session;
 @end
 
@@ -21,6 +30,7 @@ static NSString *const kSystemPrompt =
     dispatch_once(&o, ^{
         s = [CXAI new];
         s.inflight = [NSMutableSet set];
+        s.cache = [NSMutableDictionary dictionary];
         NSURLSessionConfiguration *c = [NSURLSessionConfiguration defaultSessionConfiguration];
         c.timeoutIntervalForRequest = 60;
         c.timeoutIntervalForResource = 90;
@@ -39,10 +49,42 @@ static NSString *const kSystemPrompt =
     return [b stringByAppendingString:@"/v1/chat/completions"];
 }
 
-- (NSString *)questionKey:(NSDictionary *)q {
-    NSString *stem = q[@"stem"] ?: @"";
-    NSNumber *idx = q[@"idx"] ?: @0;
-    return [NSString stringWithFormat:@"%lu-%@", (unsigned long)[stem hash], idx];
+- (NSString *)typeName:(NSString *)type {
+    if ([type isEqualToString:@"multi"]) return @"多选题";
+    if ([type isEqualToString:@"blank"]) return @"填空题/简答题";
+    return @"单选题或判断题";
+}
+
+- (NSString *)requirementFor:(NSString *)type {
+    if ([type isEqualToString:@"multi"]) return @"选出全部正确选项，answer 输出 2~4 个字母并升序排列。";
+    if ([type isEqualToString:@"blank"]) return @"按空位顺序给出答案，多个空用 ||| 分隔；简答题写在 text 里。";
+    if ([type isEqualToString:@"judge"]) return @"判断题：A=正确，B=错误，answer 输出一个字母。";
+    return @"只选一个最符合的选项，answer 输出一个字母。";
+}
+
+- (NSDictionary *)solvePayloadFor:(NSDictionary *)q {
+    NSString *type = q[@"type"] ?: @"single";
+    if ([type isEqualToString:@"single"]) {
+        NSString *stem = q[@"stem"] ?: @"";
+        if ([stem rangeOfString:@"判断"].location != NSNotFound) type = @"judge";
+    }
+    NSMutableString *optText = [NSMutableString string];
+    for (NSDictionary *o in q[@"opts"] ?: @[]) {
+        NSString *k = o[@"k"] ?: @"";
+        NSString *t = o[@"t"] ?: @"";
+        if (t.length == 0) continue;
+        [optText appendFormat:@"%@. %@\n", k, t];
+    }
+    if (optText.length == 0) [optText appendString:@"（无选项，按填空或简答处理）\n"];
+
+    NSString *content = [NSString stringWithFormat:
+                         @"【题型】%@\n【题干】%@\n【选项】\n%@【要求】%@",
+                         [self typeName:type], q[@"stem"] ?: @"", optText, [self requirementFor:type]];
+    return @{@"type": type, @"content": content};
+}
+
+- (NSString *)cacheKey:(NSDictionary *)q {
+    return [NSString stringWithFormat:@"%lu", (unsigned long)[(q[@"stem"] ?: @"") hash]];
 }
 
 - (void)solve:(NSDictionary *)question inWebView:(WKWebView *)webView frame:(WKFrameInfo *)frame {
@@ -50,7 +92,17 @@ static NSString *const kSystemPrompt =
     NSString *stem = question[@"stem"];
     if (stem.length < 2) return;
 
-    NSString *key = [self questionKey:question];
+    NSString *key = [self cacheKey:question];
+    NSDictionary *cached = self.cache[key];
+    if (cached) {
+        CXLOG(@"命中缓存，直接回填");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[CXHUD shared] showAnswer:cached question:stem];
+            [self fill:cached question:question webView:webView frame:frame];
+        });
+        return;
+    }
+
     @synchronized (self.inflight) {
         if ([self.inflight containsObject:key]) return;
         [self.inflight addObject:key];
@@ -59,25 +111,15 @@ static NSString *const kSystemPrompt =
     CXConfig *cfg = [CXConfig shared];
     if (cfg.apiKey.length == 0) {
         CXLOG(@"api key 未配置");
-        [[CXHUD shared] setStatus:@"未配置 API Key"];
+        [[CXHUD shared] setStatus:@"缺 Key"];
         @synchronized (self.inflight) { [self.inflight removeObject:key]; }
         return;
     }
 
-    NSMutableArray *opts = [NSMutableArray array];
-    for (NSDictionary *o in question[@"opts"] ?: @[]) {
-        NSString *t = o[@"t"] ?: @"";
-        if (t.length) [opts addObject:t];
-    }
-    NSDictionary *userPayload = @{@"type": question[@"type"] ?: @"single",
-                                  @"stem": stem,
-                                  @"options": opts};
-    NSData *payloadData = [NSJSONSerialization dataWithJSONObject:userPayload options:0 error:nil];
-    NSString *userContent = [[NSString alloc] initWithData:payloadData encoding:NSUTF8StringEncoding];
-
+    NSDictionary *payload = [self solvePayloadFor:question];
     NSDictionary *body = @{@"model": cfg.model ?: @"deepseek-chat",
                            @"messages": @[@{@"role": @"system", @"content": kSystemPrompt},
-                                          @{@"role": @"user", @"content": userContent}],
+                                          @{@"role": @"user", @"content": payload[@"content"]}],
                            @"temperature": @0.1,
                            @"max_tokens": @900,
                            @"stream": @NO};
@@ -89,7 +131,8 @@ static NSString *const kSystemPrompt =
     [req setValue:[@"Bearer " stringByAppendingString:cfg.apiKey] forHTTPHeaderField:@"Authorization"];
     req.HTTPBody = bodyData;
 
-    CXLOG(@"请求模型 %@ 题:%@", cfg.model, [stem substringToIndex:MIN((NSUInteger)40, stem.length)]);
+    CXLOG(@"请求 %@ 题型=%@ 题:%@", cfg.model, payload[@"type"], [stem substringToIndex:MIN((NSUInteger)30, stem.length)]);
+    CXLOG(@"prompt: %@", payload[@"content"]);
     [[CXHUD shared] setStatus:@"思考中…"];
 
     __weak typeof(self) weakSelf = self;
@@ -123,7 +166,8 @@ static NSString *const kSystemPrompt =
             return;
         }
         NSDictionary *ans = [strongSelf parseAnswer:content];
-        CXLOG(@"模型答案 %@", ans);
+        CXLOG(@"答案 %@", ans);
+        if (ans[@"answer"] && [ans[@"answer"] count]) strongSelf.cache[key] = ans;
         dispatch_async(dispatch_get_main_queue(), ^{
             [[CXHUD shared] showAnswer:ans question:stem];
             [strongSelf fill:ans question:question webView:weakWV frame:frame];
@@ -135,7 +179,6 @@ static NSString *const kSystemPrompt =
 
 - (NSDictionary *)parseAnswer:(NSString *)content {
     NSString *s = [content stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    // 去掉 ```json ``` 包裹
     if ([s containsString:@"```"]) {
         NSRange r1 = [s rangeOfString:@"```"];
         NSRange r2 = [s rangeOfString:@"```" options:NSBackwardsSearch];
@@ -154,23 +197,28 @@ static NSString *const kSystemPrompt =
             id answer = d[@"answer"];
             NSMutableArray *letters = [NSMutableArray array];
             if ([answer isKindOfClass:[NSArray class]]) {
-                for (id v in answer) if ([v isKindOfClass:[NSString class]]) [letters addObject:[v uppercaseString]];
+                for (id v in answer) {
+                    if ([v isKindOfClass:[NSString class]]) {
+                        NSString *u = [v uppercaseString];
+                        for (NSUInteger i = 0; i < u.length; i++) {
+                            unichar c = [u characterAtIndex:i];
+                            if (c >= 'A' && c <= 'H') [letters addObject:[NSString stringWithFormat:@"%C", c]];
+                        }
+                    }
+                }
             } else if ([answer isKindOfClass:[NSString class]]) {
-                for (NSUInteger i = 0; i < [answer length]; i++) {
-                    unichar c = [answer characterAtIndex:i];
-                    if (c >= 'A' && c <= 'Z') [letters addObject:[NSString stringWithFormat:@"%C", c]];
+                NSString *u = [answer uppercaseString];
+                for (NSUInteger i = 0; i < u.length; i++) {
+                    unichar c = [u characterAtIndex:i];
+                    if (c >= 'A' && c <= 'H') [letters addObject:[NSString stringWithFormat:@"%C", c]];
                 }
             }
+            // 去重并排序
+            NSArray *uniq = [[NSSet setWithArray:letters] allObjects];
+            uniq = [uniq sortedArrayUsingSelector:@selector(compare:)];
             NSString *text = d[@"text"];
             if (![text isKindOfClass:[NSString class]]) text = @"";
-            if (letters.count == 0 && text.length == 0) {
-                // 退化：整段里找孤立大写字母
-                NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"\\b[A-F]\\b" options:0 error:nil];
-                for (NSTextCheckingResult *m in [re matchesInString:s options:0 range:NSMakeRange(0, s.length)]) {
-                    [letters addObject:[s substringWithRange:m.range]];
-                }
-            }
-            return @{@"answer": letters, @"text": text};
+            return @{@"answer": uniq, @"text": text};
         }
     }
     return @{@"answer": @[], @"text": s};
@@ -190,8 +238,7 @@ static NSString *const kSystemPrompt =
     dispatch_async(dispatch_get_main_queue(), ^{
         void (^done)(id, NSError *) = ^(id r, NSError *e) {
             if (e) CXLOG(@"回填失败 %@", e.localizedDescription);
-            else CXLOG(@"回填完成 #%@", idx);
-            [[CXHUD shared] setStatus:@"已填答"];
+            else CXLOG(@"回填指令已下发 #%@", idx);
         };
         if (frame) {
             [wv evaluateJavaScript:js inFrame:frame inContentWorld:WKContentWorld.pageWorld completionHandler:done];

@@ -1,12 +1,13 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-#define CX_VERSION @"1.1.4"
+#define CX_VERSION @"1.2.0"
 #define CXLOG(...) [CXLog write:__VA_ARGS__]
 
 @interface CXLog : NSObject
 + (void)write:(NSString *)fmt, ...;
 + (NSString *)path;
++ (NSString *)tail:(NSUInteger)lines;
 @end
 
 @interface CXConfig : NSObject

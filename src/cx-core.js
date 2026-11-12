@@ -307,41 +307,102 @@
   }
 
   // ---------- 回填 ----------
-  function findItem(block, letter) {
-    var named = [];
-    try { named = block.querySelectorAll('[name]'); } catch (e) {}
-    for (var n = 0; n < named.length; n++) {
-      if ((named[n].getAttribute('name') || '').toUpperCase() === letter) return named[n];
+  function resolveTarget(el) {
+    var t = el, g = 0;
+    while (t && g++ < 4) {
+      var cls = '';
+      try { cls = String(t.className || ''); } catch (e) {}
+      if (/answerList|option|choice|item/i.test(cls)) return t;
+      t = t.parentElement;
     }
-    var cands = [];
-    try { cands = block.querySelectorAll('li,div,label,span,a,p'); } catch (e) {}
-    for (var i = 0; i < cands.length; i++) {
-      var el = cands[i], t = txt(el);
-      if (!t || t.length > 240) continue;
-      if (optLetter(t) !== letter) continue;
-      var p = el.parentElement;
-      if (p && optLetter(txt(p)) === letter) continue;
-      return el;
-    }
-    return null;
+    return el;
   }
 
-  function clickItem(el) {
-    var target = el, guard = 0;
-    while (target && guard++ < 4) {
-      var cls = '';
-      try { cls = String(target.className || ''); } catch (e) {}
-      var cur = '';
-      try { cur = window.getComputedStyle(target).cursor; } catch (e) {}
-      if (cur === 'pointer' || /option|answer|item|choice|select|radio|check/i.test(cls)) break;
-      target = target.parentElement;
+  function scopeOf(el) {
+    var s = null;
+    try { s = el.closest('.answerMain') || el.closest('.answerCon'); } catch (e) {}
+    return s || document;
+  }
+
+  function stateOf(el) {
+    var cls = '';
+    try { cls = String(el.className || ''); } catch (e) {}
+    var mark = /(^|\s)(cur|check|checked|active|selected|sel|on)(\s|$)/.test(cls) ? '1' : '0';
+    var inp = scopeOf(el).querySelector('input[name^="answers"]');
+    return mark + '|' + (inp ? inp.value : '');
+  }
+
+  function areaOf(el) {
+    var r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+
+  // 直接调用 jQuery 注册的处理函数（最接近真人点击）
+  function jqFire(el, type) {
+    var $ = window.jQuery || window.$;
+    if (!$ || !$._data) return false;
+    var evs = null;
+    try { evs = $._data(el, 'events'); } catch (e) { return false; }
+    if (!evs || !evs[type] || !evs[type].length) return false;
+    try {
+      evs[type][0].handler.call(el, {
+        type: type, target: el, currentTarget: el, delegateTarget: el, srcElement: el,
+        preventDefault: function () {}, stopPropagation: function () {},
+        isDefaultPrevented: function () { return false; },
+        isPropagationStopped: function () { return false; },
+        originalEvent: { target: el, type: type, preventDefault: function () {}, stopPropagation: function () {} }
+      });
+      return true;
+    } catch (e) { post('log', 'jq err ' + e); return false; }
+  }
+
+  function fireTouch(el) {
+    var p = areaOf(el);
+    try { el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y })); } catch (e) {}
+    try {
+      var t = new Touch({ identifier: 1, target: el, clientX: p.x, clientY: p.y, pageX: p.x + scrollX, pageY: p.y + scrollY });
+      el.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [t], targetTouches: [t], changedTouches: [t] }));
+      el.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [t] }));
+    } catch (e) {}
+  }
+
+  function fireMouse(el) {
+    var p = areaOf(el);
+    var o = { bubbles: true, cancelable: true, view: window, clientX: p.x, clientY: p.y };
+    try { el.dispatchEvent(new MouseEvent('mousedown', o)); } catch (e) {}
+    try { el.dispatchEvent(new MouseEvent('mouseup', o)); } catch (e) {}
+    try { el.dispatchEvent(new MouseEvent('click', o)); } catch (e) {}
+  }
+
+  function selectItem(el, done) {
+    var target = resolveTarget(el);
+    var before = stateOf(target);
+    var types = ['click', 'tap', 'touchend', 'touchstart', 'mousedown'];
+    for (var i = 0; i < types.length; i++) {
+      if (jqFire(target, types[i])) {
+        post('log', 'jq ' + types[i]);
+        setTimeout(function () {
+          var after = stateOf(target);
+          post('log', 'state ' + before + ' -> ' + after);
+          done && done(after !== before);
+        }, 200);
+        return;
+      }
     }
-    if (!target) target = el;
-    // 只产生一次 click，多选题点两次会被取消
-    try { target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
-    try { target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
-    try { target.click(); } catch (e) {}
-    try { target.scrollIntoView({ block: 'center' }); } catch (e) {}
+    fireTouch(target);
+    setTimeout(function () {
+      if (stateOf(target) !== before) {
+        post('log', 'touch ok ' + stateOf(target));
+        done && done(true);
+        return;
+      }
+      fireMouse(target);
+      setTimeout(function () {
+        var after = stateOf(target);
+        post('log', 'state ' + before + ' -> ' + after);
+        done && done(after !== before);
+      }, 240);
+    }, 220);
   }
 
   function setValue(el, val) {
@@ -355,43 +416,58 @@
     el.dispatchEvent(new Event('blur', { bubbles: true }));
   }
 
+  function fillTexts(node, texts) {
+    if (!texts || texts[0] == null) return;
+    var inputs = node.querySelectorAll('textarea,input[type=text],[contenteditable=true]');
+    for (var i = 0; i < inputs.length; i++) {
+      var v = texts[i] != null ? texts[i] : texts[0];
+      var el = inputs[i];
+      if (el.getAttribute('contenteditable') === 'true') {
+        el.innerHTML = '<p>' + esc(v) + '</p>';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        setValue(el, v);
+      }
+    }
+    var frames = node.querySelectorAll('iframe');
+    for (var f = 0; f < frames.length; f++) {
+      try {
+        var body = frames[f].contentDocument.body;
+        if (body) {
+          body.innerHTML = '<p>' + esc(texts[0] || '') + '</p>';
+          body.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      } catch (e) {}
+    }
+  }
+
   window.__cxFill = function (idx, letters, texts, h) {
     var q = null, i;
     for (i = 0; i < Q.length; i++) if (Q[i].h === h) { q = Q[i]; break; }
     if (!q) q = Q[idx];
     if (!q || !q.node) { post('log', 'fill miss ' + idx + ' q=' + Q.length); return; }
 
+    var elems = [];
     if (letters && letters.length) {
       for (i = 0; i < letters.length; i++) {
-        var item = findItem(q.node, String(letters[i]).toUpperCase());
-        if (item) { clickItem(item); post('log', 'click ' + letters[i]); }
-        else post('log', 'item miss ' + letters[i]);
+        var L = String(letters[i]).toUpperCase();
+        var it = findItem(q.node, L);
+        if (it) elems.push(it);
+        else post('log', 'item miss ' + L);
       }
     }
-    if (texts && texts.length && texts[0] != null) {
-      var inputs = q.node.querySelectorAll('textarea,input[type=text],[contenteditable=true]');
-      for (i = 0; i < inputs.length; i++) {
-        var v = texts[i] != null ? texts[i] : texts[0];
-        var el = inputs[i];
-        if (el.getAttribute('contenteditable') === 'true') {
-          el.innerHTML = '<p>' + esc(v) + '</p>';
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-        } else {
-          setValue(el, v);
-        }
-      }
-      var frames = q.node.querySelectorAll('iframe');
-      for (i = 0; i < frames.length; i++) {
-        try {
-          var body = frames[i].contentDocument.body;
-          if (body) {
-            body.innerHTML = '<p>' + esc(texts[0] || '') + '</p>';
-            body.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-        } catch (e) {}
-      }
+    fillTexts(q.node, texts);
+
+    var n = 0;
+    function step() {
+      if (n >= elems.length) { post('filled', idx); return; }
+      var el = elems[n++];
+      selectItem(el, function (ok) {
+        post('log', 'sel ' + (ok ? 'ok' : 'fail'));
+        setTimeout(step, 120);
+      });
     }
-    post('filled', idx);
+    step();
   };
 
   window.__cxGrab = function (force) {

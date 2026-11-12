@@ -19,6 +19,14 @@ static NSDateFormatter *gFmt;
     return [dir stringByAppendingPathComponent:kLogName];
 }
 
++ (NSString *)tail:(NSUInteger)lines {
+    NSString *s = [NSString stringWithContentsOfFile:[self path] encoding:NSUTF8StringEncoding error:nil];
+    if (s.length == 0) return @"（暂无日志）";
+    NSArray *arr = [s componentsSeparatedByString:@"\n"];
+    if (arr.count > lines) arr = [arr subarrayWithRange:NSMakeRange(arr.count - lines, lines)];
+    return [arr componentsJoinedByString:@"\n"];
+}
+
 + (void)write:(NSString *)fmt, ... {
     va_list ap;
     va_start(ap, fmt);
