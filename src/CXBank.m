@@ -82,27 +82,31 @@
 + (void)query:(NSString *)stem
          type:(NSString *)type
       options:(NSArray *)options
-   completion:(void (^)(NSDictionary *))done {
-    if (stem.length == 0) { done(nil); return; }
+   completion:(void (^)(NSDictionary *, NSString *))done {
+    if (stem.length == 0) { done(nil, nil); return; }
 
     // 1) 本地历史
     NSDictionary *local = [[CXHistory shared] answerForStem:stem];
     if (local && ([(NSArray *)local[@"answer"] count] || [(NSString *)local[@"text"] length])) {
         CXLOG(@"题库：本地命中");
-        done(local);
+        done(local, @"历史");
         return;
     }
 
     CXConfig *c = [CXConfig shared];
-    if (!c.bankEnabled) { done(nil); return; }
+    if (!c.bankEnabled) { done(nil, nil); return; }
 
     NSDictionary *ocs = [self ocsConfig];
     if (ocs) {
-        [self requestOCS:ocs stem:stem type:type options:options completion:done];
+        [self requestOCS:ocs stem:stem type:type options:options completion:^(NSDictionary *ans) {
+            done(ans, ans ? @"题库" : nil);
+        }];
         return;
     }
-    if (c.bankURL.length == 0) { done(nil); return; }
-    [self requestSimple:stem type:type completion:done];
+    if (c.bankURL.length == 0) { done(nil, nil); return; }
+    [self requestSimple:stem type:type completion:^(NSDictionary *ans) {
+        done(ans, ans ? @"题库" : nil);
+    }];
 }
 
 + (void)requestOCS:(NSDictionary *)cfg
@@ -182,13 +186,29 @@
 }
 
 + (void)testBank:(void (^)(BOOL, NSString *))done {
+    CXConfig *c = [CXConfig shared];
+    NSDictionary *ocs = [self ocsConfig];
+    if (!ocs) {
+        if (c.bankJSON.length > 10) {
+            done(NO, @"JSON 解析失败：检查引号是否为英文、括号是否完整");
+            return;
+        }
+        if (c.bankURL.length == 0) {
+            done(NO, @"未配置题库：粘贴 OCS JSON 或填简单模式地址");
+            return;
+        }
+    }
+    if (ocs && ![ocs[@"url"] isKindOfClass:[NSString class]]) {
+        done(NO, @"JSON 里没有 url 字段");
+        return;
+    }
     NSArray *opts = @[@{@"k": @"A", @"t": @"1"}, @{@"k": @"B", @"t": @"2"}];
-    [self query:@"1+1等于几" type:@"single" options:opts completion:^(NSDictionary *ans) {
+    [self query:@"1+1等于几" type:@"single" options:opts completion:^(NSDictionary *ans, NSString *source) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (!ans) { done(NO, @"未命中（检查地址/Token/配置）"); return; }
+            if (!ans) { done(NO, @"请求已发出但未命中（看日志里的题库返回）"); return; }
             NSArray *letters = ans[@"answer"];
             NSString *text = ans[@"text"] ?: @"";
-            done(YES, [NSString stringWithFormat:@"命中 %@ %@", [letters componentsJoinedByString:@""], text]);
+            done(YES, [NSString stringWithFormat:@"%@命中 %@%@", source ?: @"", [letters componentsJoinedByString:@""], text]);
         });
     }];
 }

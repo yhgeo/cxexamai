@@ -105,6 +105,7 @@ static NSDateFormatter *gFmt;
     self.bankURL = [d stringForKey:@"cx_bank_url"] ?: @"";
     self.bankToken = [d stringForKey:@"cx_bank_token"] ?: @"";
     self.bankJSON = [d stringForKey:@"cx_bank_json"] ?: @"";
+    self.forceWrite = [d boolForKey:@"cx_force_write"];
 }
 
 - (void)save {
@@ -122,6 +123,7 @@ static NSDateFormatter *gFmt;
     [d setObject:self.bankURL ?: @"" forKey:@"cx_bank_url"];
     [d setObject:self.bankToken ?: @"" forKey:@"cx_bank_token"];
     [d setObject:self.bankJSON ?: @"" forKey:@"cx_bank_json"];
+    [d setBool:self.forceWrite forKey:@"cx_force_write"];
     [d synchronize];
 }
 

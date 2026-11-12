@@ -631,8 +631,8 @@
       if (n >= elems.length) { post('filled', idx); return; }
       var item = elems[n++];
       selectItem(item.el, function (ok) {
-        if (!ok) forceSelect(item.el, item.letter, q.type);
-        post('log', 'sel ' + (ok ? 'ok' : 'fail'));
+        if (!ok && window.__cxForceWrite) forceSelect(item.el, item.letter, q.type);
+        post('log', 'sel ' + (ok ? 'ok' : (window.__cxForceWrite ? 'fail->force' : 'fail')));
         setTimeout(step, 120);
       });
     }

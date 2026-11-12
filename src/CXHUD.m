@@ -70,7 +70,8 @@
     UIStackView *_baseStack, *_modelStack, *_logStack, *_historyStack;
 
     UITextField *_base, *_model, *_key;
-    UISwitch *_auto, *_guard, *_hud, *_vision, *_bankOn;
+    UISwitch *_auto, *_guard, *_hud, *_vision, *_bankOn, *_forceWrite;
+    UIScrollView *_scroll;
     UITextField *_bankURL, *_bankToken;
     UITextView *_bankJSONView;
     NSLayoutConstraint *_historyHeight;
@@ -102,6 +103,7 @@
     [self.view addSubview:_segment];
 
     UIScrollView *scroll = [[UIScrollView alloc] init];
+    _scroll = scroll;
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
     scroll.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
     [self.view addSubview:scroll];
@@ -136,6 +138,9 @@
     _hud = [UISwitch new]; _hud.on = c.hudEnabled;
     _vision = [UISwitch new]; _vision.on = c.visionEnabled;
 
+    _forceWrite = [UISwitch new];
+    _forceWrite.on = c.forceWrite;
+
     _delayLabel = [UILabel new];
     _delayLabel.font = [UIFont systemFontOfSize:14];
     _delayLabel.text = [NSString stringWithFormat:@"开始作答延迟：%.1f 秒", c.startDelay];
@@ -147,6 +152,7 @@
                         [self row:@"考试页防检测" control:_guard],
                         [self row:@"显示悬浮球" control:_hud],
                         [self row:@"识别题目图片（需视觉模型）" control:_vision],
+                        [self row:@"实验性：点击失败时直接写答案域" control:_forceWrite],
                         _delayLabel, _delay,
                         [self button:@"重置悬浮窗位置与缩放" action:@selector(resetPanelPos)],
                         [self label:@"面板可拖动、可双指缩放，超出屏幕会自动回弹。"]] ) {
@@ -237,6 +243,8 @@
 
     for (UIView *v in @[_baseStack, _modelStack, _logStack, _historyStack]) [root addArrangedSubview:v];
     [self segmentChanged];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardChange:) name:UIKeyboardWillChangeFrameNotification object:nil];
 }
 
 - (UIStackView *)columnStack {
@@ -290,6 +298,32 @@
     row.alignment = UIStackViewAlignmentCenter;
     row.spacing = 12;
     return row;
+}
+
+- (UIView *)findFirstResponder:(UIView *)view {
+    if (view.isFirstResponder) return view;
+    for (UIView *sub in view.subviews) {
+        UIView *r = [self findFirstResponder:sub];
+        if (r) return r;
+    }
+    return nil;
+}
+
+- (void)keyboardChange:(NSNotification *)note {
+    CGRect end = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    CGRect inSelf = [self.view convertRect:end fromView:nil];
+    CGFloat overlap = MAX(0, CGRectGetMaxY(self.view.bounds) - CGRectGetMinY(inSelf));
+    UIEdgeInsets inset = UIEdgeInsetsMake(0, 0, overlap, 0);
+    _scroll.contentInset = inset;
+    _scroll.scrollIndicatorInsets = inset;
+    if (overlap > 0) {
+        UIView *fr = [self findFirstResponder:self.view];
+        if (fr) {
+            CGRect r = [fr convertRect:fr.bounds toView:_scroll];
+            r = CGRectInset(r, 0, -40);
+            [_scroll scrollRectToVisible:r animated:YES];
+        }
+    }
 }
 
 - (void)viewDidLayoutSubviews {
@@ -414,6 +448,7 @@
     c.bankEnabled = _bankOn.isOn;
     c.bankURL = _bankURL.text ?: @"";
     c.bankToken = _bankToken.text ?: @"";
+    c.forceWrite = _forceWrite.isOn;
     c.bankJSON = _bankJSONView.text ?: @"";
     c.startDelay = _delay.value;
     [c save];

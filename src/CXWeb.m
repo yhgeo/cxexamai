@@ -144,9 +144,9 @@ static char kInstalledKey;
 
     [ucc addScriptMessageHandler:[CXMessageHandler new] name:@"cxNative"];
 
-    NSString *js = [[NSString alloc] initWithBytes:cx_core_js
-                                            length:cx_core_js_len
-                                          encoding:NSUTF8StringEncoding];
+    NSString *core = [[NSString alloc] initWithBytes:cx_core_js length:cx_core_js_len encoding:NSUTF8StringEncoding];
+    NSString *js = [NSString stringWithFormat:@"window.__cxForceWrite=%@;\n%@",
+                    [CXConfig shared].forceWrite ? @"true" : @"false", core ?: @""];
     if (js.length == 0) {
         CXLOG(@"JS 资源为空，注入失败");
         return;
@@ -175,7 +175,9 @@ static char kInstalledKey;
     static NSString *js;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        js = [[NSString alloc] initWithBytes:cx_core_js length:cx_core_js_len encoding:NSUTF8StringEncoding];
+        NSString *core = [[NSString alloc] initWithBytes:cx_core_js length:cx_core_js_len encoding:NSUTF8StringEncoding];
+        js = [NSString stringWithFormat:@"window.__cxForceWrite=%@;\n%@",
+              [CXConfig shared].forceWrite ? @"true" : @"false", core ?: @""];
     });
     return js ?: @"";
 }

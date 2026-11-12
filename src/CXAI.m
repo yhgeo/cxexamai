@@ -97,13 +97,13 @@ static NSString *const kSystemPrompt =
     NSString *stem = question[@"stem"];
     if (stem.length < 2) return;
     __weak typeof(self) weakSelf = self;
-    [CXBank query:stem type:question[@"type"] ?: @"single" options:question[@"opts"] ?: @[] completion:^(NSDictionary *bankAns) {
+    [CXBank query:stem type:question[@"type"] ?: @"single" options:question[@"opts"] ?: @[] completion:^(NSDictionary *bankAns, NSString *bankSource) {
         CXAI *strongSelf = weakSelf;
         if (!strongSelf) return;
         if (bankAns && ([(NSArray *)bankAns[@"answer"] count] || [(NSString *)bankAns[@"text"] length])) {
             CXLOG(@"题库命中 %@", bankAns);
             dispatch_async(dispatch_get_main_queue(), ^{
-                [[CXHUD shared] showAnswer:bankAns question:stem source:@"题库"];
+                [[CXHUD shared] showAnswer:bankAns question:stem source:bankSource ?: @"题库"];
                 [strongSelf fill:bankAns question:question webView:webView frame:frame];
                 [[CXHistory shared] addStem:stem type:question[@"type"] ?: @"" answer:bankAns[@"answer"] ?: @[] text:bankAns[@"text"] ?: @""];
             });
