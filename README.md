@@ -35,10 +35,11 @@ CXExamAI/
    根目录下应该直接看到 `src/`、`.github/`、`README.md`。
    网页上传方式：仓库页 → Add file → Upload files → 把 `src` 文件夹和 `.github` 文件夹一起拖进去 → Commit。
 3. 打开仓库的 **Actions** 标签 → 左侧 `build-dylib` → 右侧 `Run workflow` → 绿色按钮。
-4. 等 2～4 分钟，进入这次运行记录，页面底部 **Artifacts** 下载 `CXExamAI-dylib.zip`，解压得到 `CXExamAI.dylib`。
+4. 等 2～4 分钟，构建成功后会自动创建一条 **Release**（标签形如 `v1.0.8`），
+   在仓库右侧 Releases 里点进去，下载 `CXExamAI.dylib` 即可。
 
-> 如果 Actions 提示额度/账单问题：仓库 Settings → Billing，确认私有仓库 Actions 可用；
-> 或者把仓库设为 Public（代码里没有密钥，公开也不影响使用）。
+> 构建产物走 Release 而不是 Artifacts，是因为账号的 Artifacts 存储配额已满（上传会报 quota hit）。
+> Release 附件不占该配额，后续每次构建都会生成一个新版本，旧版本可随时删。
 
 ---
 
