@@ -176,12 +176,21 @@
 
 - (void)shareLog {
     NSString *path = [CXLog path];
+    NSString *dir = [path stringByDeletingLastPathComponent];
+    NSFileManager *fm = [NSFileManager defaultManager];
     NSMutableArray *items = [NSMutableArray array];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
-        [items addObject:[NSURL fileURLWithPath:path]];
+    if ([fm fileExistsAtPath:path]) [items addObject:[NSURL fileURLWithPath:path]];
+
+    NSMutableArray *doms = [NSMutableArray array];
+    for (NSString *f in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+        if ([f hasPrefix:@"cx-dom-"] && [f hasSuffix:@".html"]) [doms addObject:f];
     }
-    NSString *text = [NSString stringWithFormat:@"CXExamAI %@\n%@\n（日志文件不存在时说明插件未产生任何输出）", CX_VERSION, path];
-    [items addObject:text];
+    [doms sortUsingComparator:^NSComparisonResult(NSString *a, NSString *b) { return [b compare:a]; }];
+    for (NSUInteger i = 0; i < MIN(doms.count, (NSUInteger)2); i++) {
+        [items addObject:[NSURL fileURLWithPath:[dir stringByAppendingPathComponent:doms[i]]]];
+    }
+    if (items.count == 0) [items addObject:[NSString stringWithFormat:@"CXExamAI %@ 暂无日志", CX_VERSION]];
+    [items addObject:[NSString stringWithFormat:@"CXExamAI %@\n%@\n（日志 + 最近 %lu 个页面 DOM）", CX_VERSION, path, (unsigned long)MIN(doms.count, (NSUInteger)2)]];
     UIActivityViewController *vc = [[UIActivityViewController alloc] initWithActivityItems:items applicationActivities:nil];
     if (vc.popoverPresentationController) {
         vc.popoverPresentationController.sourceView = self.view;
