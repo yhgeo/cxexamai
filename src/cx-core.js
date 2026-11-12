@@ -16,12 +16,13 @@
   // ---------- 页面判定 ----------
   function isExamPage() {
     var u = location.href;
-    if (/\/(exam|exam-ans|reVersionTest|work)\b|examId=|examEnc=|workId=/i.test(u)) return true;
+    if (/reVersionTestStartNew|exam-ans\/exam\/test|\/exam\/test\//i.test(u)) return true;
+    try {
+      if (document.querySelector('.answerMain, .questionWrap, .answerList')) return true;
+    } catch (e) {}
     var t = '';
-    try { t = (document.body ? document.body.innerText : '').slice(0, 5000); } catch (e) {}
-    if (/答题卡/.test(t) && /(单选|多选|判断|填空|简答)题/.test(t)) return true;
-    if (/（共\s*\d+\s*题/.test(t)) return true;
-    if (/考试/.test(document.title || '') && /题/.test(t)) return true;
+    try { t = (document.body ? document.body.innerText : '').slice(0, 3000); } catch (e) {}
+    if (/答题卡/.test(t) && /（共\s*\d+\s*题/.test(t)) return true;
     return false;
   }
   function isFacePage() { return /face|verify|liveness|renzheng|certif/i.test(location.href); }
@@ -190,7 +191,12 @@
         if (!t || t.length > 400) continue;
         opts.push({ k: L, t: t, el: it });
       }
-      if (opts.length < 2) continue;
+      var tnEl = n.querySelector('input[name^="typeName"]');
+      var tnVal = tnEl ? (tnEl.value || '') : '';
+      var textType = /简答|论述|名词解释|填空|分析|计算|材料/.test(tnVal);
+      if (opts.length < 2 && !textType) continue;
+
+      opts.sort(function (a, b) { return a.k < b.k ? -1 : (a.k > b.k ? 1 : 0); });
 
       var stem = '';
       var tit = n.querySelector('.tit');
@@ -217,11 +223,9 @@
       if (!stem || stem.length < 2) continue;
 
       var type = 'single';
-      var tn = n.querySelector('input[name^="typeName"]');
-      var tnv = tn ? (tn.value || '') : '';
-      if (/多选|不定项/.test(tnv)) type = 'multi';
-      else if (/判断/.test(tnv)) type = 'single';
-      else if (/填空|简答|论述|名词解释|分析/.test(tnv)) type = 'blank';
+      if (/多选|不定项/.test(tnVal)) type = 'multi';
+      else if (/判断/.test(tnVal)) type = 'single';
+      else if (textType) type = 'blank';
       else if (/多选题/.test(txt(tit))) type = 'multi';
 
       out.push({
@@ -300,7 +304,8 @@
         return { idx: q.idx, h: q.h, stem: q.stem, opts: q.opts, type: q.type };
       }));
       post('log', 'report ' + list.length + '/' + found.length);
-    } else if (found.length) {
+    } else if (found.length && !window.__cxSentLogged) {
+      window.__cxSentLogged = 1;
       post('log', 'found ' + found.length + ' but all sent');
     }
     return list.length;
@@ -418,6 +423,16 @@
 
   function fillTexts(node, texts) {
     if (!texts || texts[0] == null) return;
+    // UEditor：优先后端接口写入，保证提交时同步
+    try {
+      var html = '<p>' + esc(texts[0]) + '</p>';
+      var holder = node.querySelector('.edui-editor');
+      var id = holder ? holder.id : '';
+      if (id && window.UE && window.UE.getEditor) {
+        var ed = window.UE.getEditor(id);
+        if (ed && ed.setContent) { ed.setContent(html); post('log', 'ue setContent ' + id); }
+      }
+    } catch (e) { post('log', 'ue fail ' + e); }
     var inputs = node.querySelectorAll('textarea,input[type=text],[contenteditable=true]');
     for (var i = 0; i < inputs.length; i++) {
       var v = texts[i] != null ? texts[i] : texts[0];

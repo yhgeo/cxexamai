@@ -121,7 +121,7 @@ static NSString *const kSystemPrompt =
                            @"messages": @[@{@"role": @"system", @"content": kSystemPrompt},
                                           @{@"role": @"user", @"content": payload[@"content"]}],
                            @"temperature": @0.1,
-                           @"max_tokens": @900,
+                           @"max_tokens": @3000,
                            @"stream": @NO};
     NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
@@ -132,7 +132,7 @@ static NSString *const kSystemPrompt =
     req.HTTPBody = bodyData;
 
     CXLOG(@"请求 %@ 题型=%@ 题:%@", cfg.model, payload[@"type"], [stem substringToIndex:MIN((NSUInteger)30, stem.length)]);
-    CXLOG(@"prompt: %@", payload[@"content"]);
+    CXLOG(@"prompt: %@", [payload[@"content"] substringToIndex:MIN((NSUInteger)260, [payload[@"content"] length])]);
     [[CXHUD shared] setStatus:@"思考中…"];
 
     __weak typeof(self) weakSelf = self;
@@ -151,7 +151,19 @@ static NSString *const kSystemPrompt =
         if ([root isKindOfClass:[NSDictionary class]]) {
             NSArray *choices = root[@"choices"];
             if ([choices isKindOfClass:[NSArray class]] && choices.count) {
-                content = choices[0][@"message"][@"content"];
+                NSDictionary *msg = choices[0][@"message"];
+                if ([msg isKindOfClass:[NSDictionary class]]) {
+                    id c = msg[@"content"];
+                    if ([c isKindOfClass:[NSString class]] && [c length]) content = c;
+                    if (!content) {
+                        id rc = msg[@"reasoning_content"];
+                        if ([rc isKindOfClass:[NSString class]] && [rc length]) {
+                            CXLOG(@"content 为空，回退 reasoning_content (%lu 字)", (unsigned long)[rc length]);
+                            content = rc;
+                        }
+                    }
+                }
+                CXLOG(@"finish_reason=%@", choices[0][@"finish_reason"] ?: @"?");
             }
             if (!content) {
                 NSString *errMsg = root[@"error"][@"message"] ?: root[@"message"];
@@ -188,12 +200,9 @@ static NSString *const kSystemPrompt =
             s = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         }
     }
-    NSRange b1 = [s rangeOfString:@"{"];
-    NSRange b2 = [s rangeOfString:@"}" options:NSBackwardsSearch];
-    if (b1.location != NSNotFound && b2.location != NSNotFound && b2.location > b1.location) {
-        NSString *json = [s substringWithRange:NSMakeRange(b1.location, b2.location - b1.location + 1)];
+    for (NSString *json in [self jsonCandidates:s]) {
         NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
-        if ([d isKindOfClass:[NSDictionary class]]) {
+        if ([d isKindOfClass:[NSDictionary class]] && (d[@"answer"] || d[@"text"])) {
             id answer = d[@"answer"];
             NSMutableArray *letters = [NSMutableArray array];
             if ([answer isKindOfClass:[NSArray class]]) {
@@ -221,7 +230,26 @@ static NSString *const kSystemPrompt =
             return @{@"answer": uniq, @"text": text};
         }
     }
-    return @{@"answer": @[], @"text": s};
+    return @{@"answer": @[], @"text": @""};
+}
+
+/// 从文本尾部向前提取所有可解析的 JSON 对象，优先最后一个完整对象
+- (NSArray<NSString *> *)jsonCandidates:(NSString *)s {
+    NSMutableArray *out = [NSMutableArray array];
+    NSInteger end = (NSInteger)s.length - 1;
+    while (end >= 0 && out.count < 8) {
+        if ([s characterAtIndex:end] != '}') { end--; continue; }
+        NSInteger depth = 0, start = -1;
+        for (NSInteger i = end; i >= 0; i--) {
+            unichar c = [s characterAtIndex:i];
+            if (c == '}') depth++;
+            else if (c == '{') { depth--; if (depth == 0) { start = i; break; } }
+        }
+        if (start < 0) break;
+        [out addObject:[s substringWithRange:NSMakeRange(start, end - start + 1)]];
+        end = start - 1;
+    }
+    return out;
 }
 
 - (void)fill:(NSDictionary *)ans question:(NSDictionary *)q webView:(WKWebView *)wv frame:(WKFrameInfo *)frame {

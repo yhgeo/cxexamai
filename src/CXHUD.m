@@ -107,7 +107,7 @@
     tip.font = [UIFont systemFontOfSize:12];
     tip.textColor = [UIColor secondaryLabelColor];
     tip.numberOfLines = 0;
-    tip.text = @"单击悬浮球展开答案，双击立即重答，长按打开本页。\n答案会先点真实选项触发选中，再回填文本题。";
+    tip.text = @"单击悬浮球展开答案，双击立即重答，长按打开本页。\n答案会先点真实选项触发选中，再回填文本题。\n提示：deepseek-reasoner / flash 等推理模型可能返回空 content，建议用 deepseek-chat。";
 
     NSArray *views = @[_base, _model, _key,
                        [self rowWithTitle:@"自动答题" control:_auto],
