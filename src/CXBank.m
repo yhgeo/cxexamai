@@ -2,6 +2,10 @@
 #import "CXCommon.h"
 #import "CXHistory.h"
 
+// 题库服务连续失败时短路，避免每题都白等超时拖慢作答。
+static NSInteger gBankFailStreak = 0;
+static NSTimeInterval gBankLastFailAt = 0;
+
 @implementation CXBank
 
 + (NSString *)typeCN:(NSString *)type {
@@ -121,6 +125,13 @@
     // 只支持 OCS JSON 题库；简单 GET 模式已移除
     NSDictionary *ocs = [self ocsConfig];
     if (!ocs) { done(nil, nil); return; }
+    // 题库连续失败 3 次后，60 秒内直接跳过，避免每题白等超时拖慢作答
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (gBankFailStreak >= 3 && now - gBankLastFailAt < 60) {
+        CXLOG(@"题库连续失败 %ld 次，暂时跳过直连 AI", (long)gBankFailStreak);
+        done(nil, nil);
+        return;
+    }
     [self requestOCS:ocs stem:stem type:type options:options completion:^(NSDictionary *ans) {
         done(ans, ans ? @"题库" : nil);
     }];
@@ -136,7 +147,7 @@
     NSString *method = [cfg[@"method"] isKindOfClass:[NSString class]] ? cfg[@"method"] : @"post";
 
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
-    req.timeoutInterval = 10;
+    req.timeoutInterval = 4;   // 从 10 秒缩短，题库慢时不拖垮作答
     req.HTTPMethod = [method uppercaseString];
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     [req setValue:@"application/json" forHTTPHeaderField:@"Accept"];
@@ -153,6 +164,8 @@
     [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         if (err || data.length == 0) {
             CXLOG(@"题库请求失败 %@", err.localizedDescription);
+            gBankFailStreak++;
+            gBankLastFailAt = [NSDate date].timeIntervalSince1970;
             done(nil);
             return;
         }
@@ -183,6 +196,12 @@
         NSDictionary *ans = [self normalize:root[@"data"] type:type options:options];
         if (!ans) ans = [self normalize:root[@"answer"] type:type options:options];
         if (!ans) ans = [self normalize:root type:type options:options];
+        if (ans) {
+            gBankFailStreak = 0;   // 题库恢复正常
+        } else {
+            gBankFailStreak++;
+            gBankLastFailAt = [NSDate date].timeIntervalSince1970;
+        }
         CXLOG(@"题库命中 %@", ans ?: @"（无法解析）");
         done(ans);
     }] resume];

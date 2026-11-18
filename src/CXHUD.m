@@ -537,6 +537,9 @@
 
 #pragma mark - HUD
 
+@interface CXHUD () <UIGestureRecognizerDelegate>
+@end
+
 @implementation CXHUD {
     CXHUDWindow *_window;
     UIView *_ball;
@@ -570,6 +573,12 @@
         }
         if (!scene) return;
 
+        // keyWindow 变化（如进入考试页）时补装双指双击手势，
+        // 否则隐藏悬浮球后在考试页无法唤起
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(ensureToggleGestureInstalled)
+                                                     name:UIWindowDidBecomeKeyNotification
+                                                   object:nil];
         self->_window = [[CXHUDWindow alloc] initWithWindowScene:scene];
         self->_window.windowLevel = UIWindowLevelAlert + 5;
         self->_window.backgroundColor = [UIColor clearColor];
@@ -610,8 +619,20 @@
     dbl.numberOfTouchesRequired = 2;
     dbl.cancelsTouchesInView = NO;
     dbl.delaysTouchesBegan = NO;
+    dbl.delegate = self;   // 允许与 WKWebView 的缩放/滚动手势共存
     [keyWin addGestureRecognizer:dbl];
     CXLOG(@"双指双击开关已装到 keyWindow");
+}
+
+// 与考试页 WKWebView 的 pan/pinch 手势同时识别，否则双指双击会被 WebView 吃掉
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return YES;
+}
+
+// 考试页可能切换 keyWindow，每次显示状态变化时补装一次手势
+- (void)ensureToggleGestureInstalled {
+    [self installToggleGestureOnKeyWindow];
 }
 
 - (void)toggleBallVisibility {
@@ -971,6 +992,7 @@
             self->_panel.hidden = YES;
             self->_panelShown = NO;
         }
+        [self ensureToggleGestureInstalled];
     });
 }
 

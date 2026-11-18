@@ -13,6 +13,27 @@
   function hash(s) { var h = 5381; for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
+  // 清洗题干里的动态噪声：单题限时倒计时、剩余时间、分值、题号。
+  // 学习通的倒计时每秒变化，若不剥离，stem 每次不同 → hash 变 → 去重失效
+  // （同一题被反复识别/请求），回填时 h 也对不上导致 fill miss。
+  function cleanStem(s) {
+    s = String(s || '');
+    s = s.replace(/单题限时\s*\d+\s*[:：]\s*\d+/g, '')
+         .replace(/单题限时\s*\d+\s*分?\s*\d*\s*秒?/g, '')
+         .replace(/剩余时间\s*\d+\s*[:：]\s*\d+/g, '')
+         .replace(/倒计时\s*\d+\s*[:：]?\s*\d*/g, '')
+         .replace(/考试限时\s*\d+\s*[:：]\s*\d+/g, '')
+         .replace(/限时\s*\d+\s*[:：]\s*\d+/g, '')
+         .replace(/第\s*\d+\s*题/g, '')
+         .replace(/[（(]\s*\d+(\.\d+)?\s*分\s*[)）]/g, '')
+         .replace(/\b\d+(\.\d+)?\s*分\b/g, '')
+         .replace(/^\s*\d+\s*[.、．]\s*/, '')
+         .replace(/^[\s　]*[（(]\s*\d+\s*[)）][\s　]*/, '')
+         .replace(/[\s　]+/g, ' ')
+         .trim();
+    return s;
+  }
+
   // ---------- 页面判定 ----------
   function isExamPage() {
     var u = location.href;
@@ -143,11 +164,7 @@
       if (p > 0 && p < cut) cut = p;
     }
     var s = all.slice(0, cut);
-    s = s.replace(/^\s*\d+\s*[\.、]\s*/, '')
-         .replace(/^\s*[（(]\s*[\d.]+\s*分\s*[)）]\s*/, '')
-         .replace(/\s+/g, ' ')
-         .trim();
-    return s;
+    return cleanStem(s);
   }
 
   function typeOf(block, stem) {
@@ -254,10 +271,18 @@
           stem = txt(clone);
         }
       }
-      stem = stem.replace(/^\s*\d+\s*[\.、．]\s*/, '')
-                 .replace(/^[（(]\s*[\d.]+\s*分\s*[)）]\s*/, '')
-                 .replace(/\s+/g, ' ')
-                 .trim();
+      stem = cleanStem(stem);
+
+      // 题干正文有时不在 .tit（如图文混排的简答题），清洗后过短。
+      // 退回整块文本再清洗一次，仍不行则用题图片 URL 做稳定身份。
+      if (stem.length < 4) {
+        var full = cleanStem(txt(n));
+        if (full.length > stem.length) stem = full;
+      }
+      var imgs0 = collectImages(n);
+      if (stem.length < 2 && imgs0.length) {
+        stem = '【图片题】' + hash(imgs0[0]);  // URL 稳定，倒计时无关
+      }
       if (!stem || stem.length < 2) continue;
 
       var type = 'single';
@@ -272,7 +297,7 @@
         stem: stem,
         opts: opts.map(function (o) { return { k: o.k, t: o.t }; }),
         type: type,
-        imgs: collectImages(n),
+        imgs: imgs0,
         node: n,
         items: opts.map(function (o) { return o.el; })
       });
