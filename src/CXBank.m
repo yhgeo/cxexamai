@@ -4,13 +4,6 @@
 
 @implementation CXBank
 
-+ (NSString *)typeCode:(NSString *)type {
-    if ([type isEqualToString:@"multi"]) return @"1";
-    if ([type isEqualToString:@"judge"]) return @"2";
-    if ([type isEqualToString:@"blank"]) return @"3";
-    return @"0";
-}
-
 + (NSString *)typeCN:(NSString *)type {
     if ([type isEqualToString:@"multi"]) return @"多选题";
     if ([type isEqualToString:@"judge"]) return @"判断题";
@@ -125,15 +118,10 @@
     CXConfig *c = [CXConfig shared];
     if (!c.bankEnabled) { done(nil, nil); return; }
 
+    // 只支持 OCS JSON 题库；简单 GET 模式已移除
     NSDictionary *ocs = [self ocsConfig];
-    if (ocs) {
-        [self requestOCS:ocs stem:stem type:type options:options completion:^(NSDictionary *ans) {
-            done(ans, ans ? @"题库" : nil);
-        }];
-        return;
-    }
-    if (c.bankURL.length == 0) { done(nil, nil); return; }
-    [self requestSimple:stem type:type completion:^(NSDictionary *ans) {
+    if (!ocs) { done(nil, nil); return; }
+    [self requestOCS:ocs stem:stem type:type options:options completion:^(NSDictionary *ans) {
         done(ans, ans ? @"题库" : nil);
     }];
 }
@@ -200,51 +188,18 @@
     }] resume];
 }
 
-+ (void)requestSimple:(NSString *)stem type:(NSString *)type completion:(void (^)(NSDictionary *))done {
-    CXConfig *c = [CXConfig shared];
-    // URLQueryAllowedCharacterSet 把 + / & = 当合法字符放过，题干里的 "1+1" 到
-    // 服务端 query 解析会变空格。改用严格的字母数字+少数安全符号白名单。
-    NSMutableCharacterSet *allowed = [NSMutableCharacterSet alphanumericCharacterSet];
-    [allowed addCharactersInString:@"-_.~"];
-    NSString *sep = [c.bankURL containsString:@"?"] ? @"&" : @"?";
-    NSString *urlStr = [NSString stringWithFormat:@"%@%@question=%@&type=%@&token=%@",
-                        c.bankURL, sep,
-                        [stem stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: @"",
-                        [self typeCode:type],
-                        [c.bankToken stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: @""];
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlStr]];
-    req.timeoutInterval = 8;
-    CXLOG(@"题库 GET %@", c.bankURL);
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-        if (err || data.length == 0) { done(nil); return; }
-        id root = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-        NSDictionary *ans = nil;
-        if ([root isKindOfClass:[NSDictionary class]]) {
-            id payload = root[@"data"] ?: root[@"result"] ?: root[@"answer"];
-            ans = [self normalize:payload type:type options:@[]];
-            if (!ans) ans = [self normalize:root type:type options:@[]];
-        } else {
-            ans = [self normalize:root type:type options:@[]];
-        }
-        CXLOG(@"题库返回 %@", ans ?: @"未命中");
-        done(ans);
-    }] resume];
-}
-
 + (void)testBank:(void (^)(BOOL, NSString *))done {
     CXConfig *c = [CXConfig shared];
     NSDictionary *ocs = [self ocsConfig];
     if (!ocs) {
         if (c.bankJSON.length > 10) {
             done(NO, @"JSON 解析失败：检查引号是否为英文、括号是否完整");
-            return;
+        } else {
+            done(NO, @"未配置题库：请粘贴 OCS 题库 JSON 数组");
         }
-        if (c.bankURL.length == 0) {
-            done(NO, @"未配置题库：粘贴 OCS JSON 或填简单模式地址");
-            return;
-        }
+        return;
     }
-    if (ocs && ![ocs[@"url"] isKindOfClass:[NSString class]]) {
+    if (![ocs[@"url"] isKindOfClass:[NSString class]]) {
         done(NO, @"JSON 里没有 url 字段");
         return;
     }

@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-#define CX_VERSION @"1.7.0"
+#define CX_VERSION @"1.8.0"
 #define CXLOG(...) [CXLog write:__VA_ARGS__]
 
 @interface CXLog : NSObject
@@ -17,17 +17,16 @@
 @property (nonatomic, copy) NSString *model;
 @property (nonatomic, copy) NSString *apiKey;
 @property (nonatomic, assign) BOOL autoAnswer;
-@property (nonatomic, assign) BOOL guardEnabled;
+@property (nonatomic, assign) BOOL guardEnabled;      // 考试页防检测（JS 层）
+@property (nonatomic, assign) BOOL leaveGuardEnabled; // 原生层离场拦截（实验，默认关：可能导致断网）
 @property (nonatomic, assign) BOOL hudEnabled;
 @property (nonatomic, assign) double startDelay;   // 检测到题目后多久开始作答
 @property (nonatomic, assign) double gapDelay;     // 多题之间的间隔
 @property (nonatomic, assign) BOOL visionEnabled;  // 题目含图片时用视觉模型
 @property (nonatomic, assign) BOOL bankEnabled;    // 题库优先
-@property (nonatomic, copy) NSString *bankURL;
-@property (nonatomic, copy) NSString *bankToken;
 @property (nonatomic, copy) NSString *bankJSON;   // OCS 题库配置（JSON 数组）
-@property (nonatomic, assign) BOOL forceWrite;    // 实验性：点击失败时直接写答案域
-@property (nonatomic, assign) BOOL autoFill;      // 实验性：自动填答总开关
+@property (nonatomic, assign) BOOL forceWrite;    // 旧配置兼容：点击失败时写答案域（UI 已移除）
+@property (nonatomic, assign) BOOL autoFill;      // 自动填答总开关
 @property (nonatomic, assign) BOOL probeEnabled;  // 调试：原生视图探针（默认关，避免生产环境 hook）
 + (instancetype)shared;
 - (void)reload;

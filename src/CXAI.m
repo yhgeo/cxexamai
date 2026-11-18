@@ -434,7 +434,7 @@ static NSString *const kSystemPrompt =
         return;
     }
     if (![CXConfig shared].autoFill) {
-        CXLOG(@"实验性自动填答未开启，仅展示答案");
+        CXLOG(@"自动填答未开启，仅展示答案");
         [[CXHUD shared] setStatus:@"仅展示 · 自动填答未开启"];
         return;
     }

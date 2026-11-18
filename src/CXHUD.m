@@ -70,9 +70,8 @@
     UIStackView *_baseStack, *_modelStack, *_logStack, *_historyStack;
 
     UITextField *_base, *_model, *_key;
-    UISwitch *_auto, *_guard, *_hud, *_vision, *_bankOn, *_autoFill, *_probe;
+    UISwitch *_auto, *_guard, *_leaveGuard, *_hud, *_vision, *_bankOn, *_autoFill, *_probe;
     UIScrollView *_scroll;
-    UITextField *_bankURL, *_bankToken;
     UITextView *_bankJSONView;
     NSLayoutConstraint *_historyHeight;
     UISlider *_delay;
@@ -96,7 +95,7 @@
 
     CXConfig *c = [CXConfig shared];
 
-    _segment = [[UISegmentedControl alloc] initWithItems:@[@"基础", @"模型", @"日志", @"缓存"]];
+    _segment = [[UISegmentedControl alloc] initWithItems:@[@"基础", @"接口", @"日志", @"缓存"]];
     _segment.selectedSegmentIndex = 0;
     [_segment addTarget:self action:@selector(segmentChanged) forControlEvents:UIControlEventValueChanged];
     _segment.translatesAutoresizingMaskIntoConstraints = NO;
@@ -135,13 +134,11 @@
     _baseStack = [self columnStack];
     _auto = [UISwitch new]; _auto.on = c.autoAnswer;
     _guard = [UISwitch new]; _guard.on = c.guardEnabled;
+    _leaveGuard = [UISwitch new]; _leaveGuard.on = c.leaveGuardEnabled;
     _hud = [UISwitch new]; _hud.on = c.hudEnabled;
     _vision = [UISwitch new]; _vision.on = c.visionEnabled;
-
-    _autoFill = [UISwitch new];
-    _autoFill.on = c.autoFill;
-    _probe = [UISwitch new];
-    _probe.on = c.probeEnabled;
+    _autoFill = [UISwitch new]; _autoFill.on = c.autoFill;
+    _probe = [UISwitch new]; _probe.on = c.probeEnabled;
 
     _delayLabel = [UILabel new];
     _delayLabel.font = [UIFont systemFontOfSize:14];
@@ -150,15 +147,26 @@
     _delay.minimumValue = 0; _delay.maximumValue = 5; _delay.value = c.startDelay;
     [_delay addTarget:self action:@selector(delayChanged) forControlEvents:UIControlEventValueChanged];
 
-    for (UIView *v in @[[self row:@"自动答题" control:_auto],
-                        [self row:@"考试页防检测" control:_guard],
-                        [self row:@"显示悬浮球" control:_hud],
-                        [self row:@"识别题目图片（需视觉模型）" control:_vision],
-                        [self row:@"实验性：自动填答（点选项/填文本）" control:_autoFill],
-                        [self row:@"调试：原生视图探针（需重启App）" control:_probe],
-                        _delayLabel, _delay,
-                        [self button:@"重置悬浮窗位置与缩放" action:@selector(resetPanelPos)],
-                        [self label:@"面板可拖动、可双指缩放，超出屏幕会自动回弹。"]] ) {
+    for (UIView *v in @[
+            [self sectionTitle:@"答题"],
+            [self row:@"自动答题" control:_auto],
+            [self row:@"自动填答（点选选项 / 填入文本）" control:_autoFill],
+            [self row:@"识别题目图片（需视觉模型）" control:_vision],
+            _delayLabel, _delay,
+
+            [self sectionTitle:@"界面"],
+            [self row:@"显示悬浮球" control:_hud],
+            [self label:@"双指双击屏幕可随时显示/隐藏悬浮球；隐藏后仍会正常抓题作答，只是不显示。"],
+
+            [self sectionTitle:@"防检测"],
+            [self row:@"考试页防检测（防切屏）" control:_guard],
+            [self row:@"离场通知拦截（实验，可能导致断网）" control:_leaveGuard],
+
+            [self sectionTitle:@"调试"],
+            [self row:@"原生视图探针（需重启 App）" control:_probe],
+            [self button:@"重置悬浮窗位置与缩放" action:@selector(resetPanelPos)],
+            [self label:@"面板可拖动、可双指缩放，超出屏幕会自动回弹。"],
+    ]) {
         [_baseStack addArrangedSubview:v];
     }
 
@@ -176,8 +184,6 @@
 
     _bankOn = [UISwitch new];
     _bankOn.on = c.bankEnabled;
-    _bankURL = [self field:@"简单模式地址（GET ?question=&type=&token=）" value:c.bankURL];
-    _bankToken = [self field:@"简单模式 Token（可选）" value:c.bankToken];
 
     _bankJSONView = [UITextView new];
     _bankJSONView.backgroundColor = [UIColor secondarySystemBackgroundColor];
@@ -187,15 +193,18 @@
     _bankJSONView.text = c.bankJSON;
     [_bankJSONView.heightAnchor constraintEqualToConstant:130].active = YES;
 
-    for (UIView *v in @[_base, _model, _key,
-                        [self button:@"测试接口连通" action:@selector(testAPI)],
-                        _testLabel,
-                        [self label:@"题库（优先于 AI）：把 OCS 的题库 JSON 数组粘到下面即可"],
-                        [self row:@"启用题库" control:_bankOn],
-                        _bankJSONView,
-                        [self button:@"检测题库连通" action:@selector(testBank)],
-                        _bankURL, _bankToken,
-                        [self label:@"请求格式：GET {地址}?question=题干&type=0/1/2/3&token=xxx；未命中自动转 AI。图片识别会按视觉格式发送 base64，接口不支持时降级纯文本。"]] ) {
+    for (UIView *v in @[
+            [self sectionTitle:@"大模型接口"],
+            _base, _model, _key,
+            [self button:@"测试接口连通" action:@selector(testAPI)],
+            _testLabel,
+
+            [self sectionTitle:@"题库（优先于 AI）"],
+            [self row:@"启用题库" control:_bankOn],
+            [self label:@"把 OCS 题库的 JSON 数组粘贴到下方；未命中自动转 AI。"],
+            _bankJSONView,
+            [self button:@"检测题库连通" action:@selector(testBank)],
+    ]) {
         [_modelStack addArrangedSubview:v];
     }
 
@@ -220,11 +229,16 @@
     pathLabel.numberOfLines = 2;
     pathLabel.text = [CXLog path];
 
-    for (UIView *v in @[_sizeLabel,
-                        [self button:@"刷新日志" action:@selector(refreshLog)],
-                        [self button:@"清理日志与 DOM" action:@selector(cleanupFiles)],
-                        [self button:@"导出日志 + DOM 快照" action:@selector(shareLog)],
-                        _logView, pathLabel]) {
+    for (UIView *v in @[
+            [self sectionTitle:@"运行日志"],
+            _sizeLabel,
+            [self button:@"刷新日志" action:@selector(refreshLog)],
+            [self button:@"清理日志与 DOM" action:@selector(cleanupFiles)],
+            [self button:@"导出日志 + DOM 快照" action:@selector(shareLog)],
+            _logView,
+            [self label:@"日志文件完整路径："],
+            pathLabel,
+    ]) {
         [_logStack addArrangedSubview:v];
     }
 
@@ -238,9 +252,12 @@
     _historyHeight = [_historyTable.heightAnchor constraintEqualToConstant:380];
     _historyHeight.active = YES;
 
-    for (UIView *v in @[[self label:@"已缓存题目（最近 100 条），点击可复制。"],
-                        _historyTable,
-                        [self button:@"清空缓存" action:@selector(clearHistory)]]) {
+    for (UIView *v in @[
+            [self sectionTitle:@"答题缓存"],
+            [self label:@"最近 100 条，点击可复制题干、选项与答案。"],
+            _historyTable,
+            [self button:@"清空缓存" action:@selector(clearHistory)],
+    ]) {
         [_historyStack addArrangedSubview:v];
     }
 
@@ -257,6 +274,17 @@
     s.layoutMargins = UIEdgeInsetsMake(8, 0, 20, 0);
     s.layoutMarginsRelativeArrangement = YES;
     return s;
+}
+
+- (UILabel *)sectionTitle:(NSString *)text {
+    UILabel *l = [UILabel new];
+    l.text = text;
+    l.font = [UIFont boldSystemFontOfSize:13];
+    l.textColor = [UIColor systemBlueColor];
+    // 顶部留白，作为分组间隔
+    l.translatesAutoresizingMaskIntoConstraints = NO;
+    [l.heightAnchor constraintEqualToConstant:26].active = YES;
+    return l;
 }
 
 - (UILabel *)label:(NSString *)text {
@@ -455,11 +483,10 @@
     c.apiKey = _key.text ?: @"";
     c.autoAnswer = _auto.isOn;
     c.guardEnabled = _guard.isOn;
+    c.leaveGuardEnabled = _leaveGuard.isOn;
     c.hudEnabled = _hud.isOn;
     c.visionEnabled = _vision.isOn;
     c.bankEnabled = _bankOn.isOn;
-    c.bankURL = _bankURL.text ?: @"";
-    c.bankToken = _bankToken.text ?: @"";
     c.autoFill = _autoFill.isOn;
     c.probeEnabled = _probe.isOn;
     c.bankJSON = _bankJSONView.text ?: @"";
@@ -554,8 +581,45 @@
         [self buildBallInView:root.view];
         [self buildPanelInView:root.view];
         self->_window.hidden = ![CXConfig shared].hudEnabled;
+        [self installToggleGestureOnKeyWindow];
         CXLOG(@"HUD 已安装 v%@ bounds=%@", CX_VERSION, NSStringFromCGRect(self->_window.bounds));
     });
+}
+
+// 双指双击切换悬浮球显示。手势装在 App 主 window 上（不是 HUD window），
+// 这样悬浮球隐藏、HUD window 不可见时仍能唤起。cancelsTouchesInView=NO
+// 保证不影响考试页点击选项。
+- (void)installToggleGestureOnKeyWindow {
+    UIWindow *keyWin = nil;
+    for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+        if (![s isKindOfClass:[UIWindowScene class]]) continue;
+        for (UIWindow *w in ((UIWindowScene *)s).windows) {
+            if (w.isKeyWindow && w != self->_window) { keyWin = w; break; }
+        }
+        if (keyWin) break;
+    }
+    if (!keyWin) return;
+    // 防止重复安装
+    for (UIGestureRecognizer *g in keyWin.gestureRecognizers) {
+        if (g.view == keyWin && [g isKindOfClass:[UITapGestureRecognizer class]] &&
+            ((UITapGestureRecognizer *)g).numberOfTouchesRequired == 2 &&
+            ((UITapGestureRecognizer *)g).numberOfTapsRequired == 2) return;
+    }
+    UITapGestureRecognizer *dbl = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggleBallVisibility)];
+    dbl.numberOfTapsRequired = 2;
+    dbl.numberOfTouchesRequired = 2;
+    dbl.cancelsTouchesInView = NO;
+    dbl.delaysTouchesBegan = NO;
+    [keyWin addGestureRecognizer:dbl];
+    CXLOG(@"双指双击开关已装到 keyWindow");
+}
+
+- (void)toggleBallVisibility {
+    BOOL now = ![CXConfig shared].hudEnabled;
+    [CXConfig shared].hudEnabled = now;
+    [[CXConfig shared] save];
+    [self setVisible:now];
+    CXLOG(@"双指双击切换悬浮球 -> %@", now ? @"显示" : @"隐藏");
 }
 
 - (void)buildBallInView:(UIView *)host {
@@ -892,7 +956,8 @@
         } else {
             self->_hintLabel.text = letters.count ? @"已出答案，正在点选" : @"已出答案，正在填入";
         }
-        if ([UIScreen mainScreen].isCaptured) return;
+        // 悬浮球关闭时或录屏中不主动弹面板，但答案数据与自动填答照常进行
+        if (![CXConfig shared].hudEnabled || [UIScreen mainScreen].isCaptured) return;
         self->_panel.hidden = NO;
         self->_panelShown = YES;
     });
@@ -901,6 +966,11 @@
 - (void)setVisible:(BOOL)visible {
     dispatch_async(dispatch_get_main_queue(), ^{
         self->_window.hidden = !visible;
+        if (!visible) {
+            // 悬浮球隐藏时悬浮窗一起收起；抓题/作答仍在后台照常运行，只是不主动显示
+            self->_panel.hidden = YES;
+            self->_panelShown = NO;
+        }
     });
 }
 

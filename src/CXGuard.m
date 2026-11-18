@@ -8,7 +8,9 @@
 // 考试期间抑制失焦/进后台通知，阻止学习通向服务端上报"离开考试"。
 // 人脸/认证页由 CXWeb inExamPage 放行，避免活体检测卡死。
 static BOOL CXShouldBlockLeaveNotification(NSNotificationName name) {
-    if (![CXConfig shared].guardEnabled) return NO;
+    // 用独立开关，默认关。此方案会篡改系统通知分发，实测可能导致网络异常，
+    // 交由用户自己决定是否开启；JS 层防检测不受影响。
+    if (![CXConfig shared].leaveGuardEnabled) return NO;
     if (![CXWeb inExamPage]) return NO;
     return [name isEqualToString:UIApplicationWillResignActiveNotification] ||
            [name isEqualToString:UIApplicationDidEnterBackgroundNotification];
