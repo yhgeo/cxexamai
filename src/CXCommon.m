@@ -217,6 +217,51 @@ NSString *CXQuestionFP(NSString *stem, NSArray *opts) {
     return [fp copy];
 }
 
+static NSString *CXFlatText(id s) {
+    if (![s isKindOfClass:[NSString class]]) return @"";
+    return [[s lowercaseString] stringByReplacingOccurrencesOfString:@" " withString:@""];
+}
+
+NSArray *CXTextsForLetters(NSArray *letters, NSArray *opts) {
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSString *L in letters) {
+        if (![L isKindOfClass:[NSString class]]) continue;
+        for (NSDictionary *o in opts) {
+            if (![o isKindOfClass:[NSDictionary class]]) continue;
+            if ([[o[@"k"] uppercaseString] isEqualToString:[L uppercaseString]]) {
+                NSString *t = o[@"t"] ?: @"";
+                if (t.length) [out addObject:t];
+                break;
+            }
+        }
+    }
+    return out;
+}
+
+NSArray *CXLettersForTexts(NSArray *texts, NSArray *opts) {
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSString *text in texts) {
+        if (![text isKindOfClass:[NSString class]] || ![text length]) continue;
+        NSString *flat = CXFlatText(text);
+        NSString *hit = nil;
+        // 1) 精确相等
+        for (NSDictionary *o in opts) {
+            if (![o isKindOfClass:[NSDictionary class]]) continue;
+            if ([CXFlatText(o[@"t"]) isEqualToString:flat]) { hit = o[@"k"]; break; }
+        }
+        // 2) 足够长的单向包含
+        if (!hit && flat.length >= 4) {
+            for (NSDictionary *o in opts) {
+                if (![o isKindOfClass:[NSDictionary class]]) continue;
+                NSString *of = CXFlatText(o[@"t"]);
+                if (of.length >= 4 && ([of containsString:flat] || [flat containsString:of])) { hit = o[@"k"]; break; }
+            }
+        }
+        if (hit) [out addObject:hit];
+    }
+    return out;
+}
+
 UIViewController *CXTopViewController(void) {
     UIWindow *keyWin = nil;
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {

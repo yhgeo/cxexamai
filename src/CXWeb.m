@@ -207,6 +207,28 @@ static char kInstalledKey;
     }];
 }
 
++ (BOOL)inExamPage {
+    if (!gExamWebViews) return NO;
+    BOOL inExam = NO;
+    @synchronized (gExamWebViews) {
+        for (WKWebView *wv in gExamWebViews) {
+            if (!wv) continue;
+            NSString *u = wv.URL.absoluteString ?: @"";
+            // 人脸/认证页放行，避免反检测导致活体检测卡死
+            NSString *low = [u lowercaseString];
+            BOOL isFace = [low rangeOfString:@"face"].location != NSNotFound ||
+                          [low rangeOfString:@"verify"].location != NSNotFound ||
+                          [low rangeOfString:@"liveness"].location != NSNotFound ||
+                          [low rangeOfString:@"renzheng"].location != NSNotFound ||
+                          [low rangeOfString:@"certif"].location != NSNotFound;
+            if (isFace) continue;
+            inExam = YES;
+            break;
+        }
+    }
+    return inExam;
+}
+
 + (void)manualTrigger {
     NSArray *list = nil;
     @synchronized (gExamWebViews) { list = gExamWebViews.allObjects; }

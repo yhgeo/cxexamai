@@ -71,6 +71,26 @@
   }
   function isOpt(t) { return !!optLetter(t); }
 
+  // 按选项元素在屏幕上的真实位置（先上后下、同行先左后右）排序，
+  // 然后按视觉顺序重新编号 A/B/C/D。学习通把显示顺序和 DOM name 打乱时，
+  // 只有视觉顺序才和用户看到的一致；题库/缓存再按文本锚定即可对上。
+  function orderByVisual(opts) {
+    for (var i = 0; i < opts.length; i++) {
+      var el = opts[i].el, y = 1e9, x = 0;
+      if (el && el.getBoundingClientRect) {
+        try { var r = el.getBoundingClientRect(); y = r.top; x = r.left; } catch (e) {}
+      }
+      opts[i]._y = y; opts[i]._x = x;
+    }
+    opts.sort(function (a, b) {
+      var dy = a._y - b._y;
+      if (Math.abs(dy) > 6) return dy;   // 不同行
+      return a._x - b._x;                // 同一行按左右
+    });
+    for (var j = 0; j < opts.length; j++) opts[j].k = String.fromCharCode(65 + j);
+    return opts;
+  }
+
   function optionNodes(doc) {
     var res = [], all;
     try { all = doc.querySelectorAll('li,div,label,p,span,a'); } catch (e) { return res; }
@@ -212,7 +232,9 @@
       var textType = /简答|论述|名词解释|填空|分析|计算|材料/.test(tnVal);
       if (opts.length < 2 && !textType) continue;
 
-      opts.sort(function (a, b) { return a.k < b.k ? -1 : (a.k > b.k ? 1 : 0); });
+      // 学习通会用 CSS/JS 把选项显示位置与 DOM 的 name/字母错位。
+      // 按屏幕真实坐标排序并按视觉顺序重编 k，面板显示与点选才一致。
+      orderByVisual(opts);
 
       var stem = '';
       var tit = n.querySelector('.tit');
@@ -623,6 +645,7 @@
   }
 
   window.__cxFill = function (idx, letters, texts, h) {
+    post('log', 'fill enter idx=' + idx + ' letters=' + JSON.stringify(letters) + ' h=' + h + ' Q=' + Q.length);
     try {
       doFill(idx, letters, texts, h);
     } catch (e) {
@@ -634,6 +657,39 @@
     }
   };
 
+  // 在题目节点里按字母定位选项 DOM。学习通 .answerList 用 name="A" 标记；
+  // 老版卡片用 .No 文本或选项首字母。这个函数曾在某些版本被误删，导致
+  // doFill 抛 ReferenceError 被吞掉、自动填答静默失效。
+  function findItem(block, letter) {
+    if (!block || !letter) return null;
+    letter = String(letter).toUpperCase();
+    var named = [];
+    try { named = block.querySelectorAll('[name]'); } catch (e) {}
+    for (var n = 0; n < named.length; n++) {
+      if ((named[n].getAttribute('name') || '').toUpperCase() === letter) return named[n];
+    }
+    // 卡片式：.answerList 里的 .No 文本就是字母
+    var nos = [];
+    try { nos = block.querySelectorAll('.answerList .No, .answerList .no'); } catch (e) {}
+    for (var m = 0; m < nos.length; m++) {
+      if (txt(nos[m]).toUpperCase() === letter) {
+        return nos[m].closest ? (nos[m].closest('.answerList') || nos[m]) : nos[m].parentElement;
+      }
+    }
+    // 兜底：选项文本以 "A." / "A、" 开头的元素
+    var cands = [];
+    try { cands = block.querySelectorAll('li,div,label,span,a,p'); } catch (e) {}
+    for (var i = 0; i < cands.length; i++) {
+      var el = cands[i], t = txt(el);
+      if (!t || t.length > 240) continue;
+      if (optLetter(t) !== letter) continue;
+      var p = el.parentElement;
+      if (p && optLetter(txt(p)) === letter) continue;
+      return el;
+    }
+    return null;
+  }
+
   function doFill(idx, letters, texts, h) {
     var q = findQ(idx, h), i;
     if (!q || !q.node) { post('log', 'fill miss ' + idx + ' h=' + h + ' q=' + Q.length); return; }
@@ -643,7 +699,11 @@
     if (letters && letters.length) {
       for (i = 0; i < letters.length; i++) {
         var L = String(letters[i]).toUpperCase();
-        var it = findItem(q.node, L);
+        // q.items 与 q.opts 顺序一致，且抓题时已按屏幕视觉顺序排序/编号。
+        // 直接用字母对应的索引取元素，避免 name 属性与视觉错位时点错。
+        var vi = L.charCodeAt(0) - 65;
+        var it = (q.items && vi >= 0 && vi < q.items.length && nodeLive(q.items[vi]))
+                 ? q.items[vi] : findItem(q.node, L);
         if (it) elems.push({ el: it, letter: L });
         else post('log', 'item miss ' + L);
       }
@@ -655,8 +715,7 @@
       if (n >= elems.length) { post('filled', idx); return; }
       var item = elems[n++];
       selectItem(item.el, function (ok) {
-        if (!ok && window.__cxForceWrite) forceSelect(item.el, item.letter, q.type);
-        post('log', 'sel ' + (ok ? 'ok' : (window.__cxForceWrite ? 'fail->force' : 'fail')));
+        post('log', 'sel ' + item.letter + ' ' + (ok ? 'ok' : 'fail'));
         setTimeout(step, 120);
       });
     }

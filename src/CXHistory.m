@@ -47,12 +47,16 @@ static const NSUInteger kMaxItems = 100;
         if (ans.length) [ans appendString:@" "];
         [ans appendString:text];
     }
+    // 存答案对应的选项文本：学习通选项乱序时字母会失效，文本才是锚点
+    NSArray *at = CXTextsForLetters(answer ?: @[], options ?: @[]);
     NSDictionary *item = @{@"t": @([[NSDate date] timeIntervalSince1970]),
                            @"type": type ?: @"",
                            @"stem": stem,
                            @"fp": CXQuestionFP(stem, options),
                            @"ans": ans.length ? ans : @"（空）",
                            @"a": answer ?: @[],
+                           @"at": at,
+                           @"opts": options ?: @[],
                            @"x": text ?: @""};
     [_items insertObject:item atIndex:0];
     while (_items.count > kMaxItems) [_items removeLastObject];
@@ -92,6 +96,17 @@ static const NSUInteger kMaxItems = 100;
     if (![a isKindOfClass:[NSArray class]]) a = @[];
     if (![x isKindOfClass:[NSString class]]) x = @"";
     if (a.count == 0 && x.length == 0) return nil;
+
+    // 缓存里的字母是按入库时的选项顺序存的，学习通换卷后顺序会变。
+    // 用存下来的答案文本在当前选项里反查，得到当前屏幕顺序对应的字母。
+    NSArray *at = hit[@"at"];
+    if ([at isKindOfClass:[NSArray class]] && at.count && options.count) {
+        NSArray *remapped = CXLettersForTexts(at, options);
+        if (remapped.count) {
+            CXLOG(@"缓存文本锚定重映射 %@ -> %@", [a componentsJoinedByString:@""], [remapped componentsJoinedByString:@""]);
+            a = remapped;
+        }
+    }
     return @{@"answer": a, @"text": x};
 }
 

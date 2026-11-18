@@ -70,7 +70,7 @@
     UIStackView *_baseStack, *_modelStack, *_logStack, *_historyStack;
 
     UITextField *_base, *_model, *_key;
-    UISwitch *_auto, *_guard, *_hud, *_vision, *_bankOn, *_forceWrite, *_autoFill, *_probe;
+    UISwitch *_auto, *_guard, *_hud, *_vision, *_bankOn, *_autoFill, *_probe;
     UIScrollView *_scroll;
     UITextField *_bankURL, *_bankToken;
     UITextView *_bankJSONView;
@@ -140,8 +140,6 @@
 
     _autoFill = [UISwitch new];
     _autoFill.on = c.autoFill;
-    _forceWrite = [UISwitch new];
-    _forceWrite.on = c.forceWrite;
     _probe = [UISwitch new];
     _probe.on = c.probeEnabled;
 
@@ -157,7 +155,6 @@
                         [self row:@"显示悬浮球" control:_hud],
                         [self row:@"识别题目图片（需视觉模型）" control:_vision],
                         [self row:@"实验性：自动填答（点选项/填文本）" control:_autoFill],
-                        [self row:@"实验性：点击失败时写答案域" control:_forceWrite],
                         [self row:@"调试：原生视图探针（需重启App）" control:_probe],
                         _delayLabel, _delay,
                         [self button:@"重置悬浮窗位置与缩放" action:@selector(resetPanelPos)],
@@ -394,9 +391,18 @@
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     NSDictionary *item = _historyItems[indexPath.row];
-    NSString *text = [NSString stringWithFormat:@"%@\n答案：%@", item[@"stem"] ?: @"", item[@"ans"] ?: @""];
+    NSMutableString *text = [NSMutableString stringWithFormat:@"%@", item[@"stem"] ?: @""];
+    NSArray *opts = item[@"opts"];
+    if ([opts isKindOfClass:[NSArray class]] && opts.count) {
+        [text appendString:@"\n"];
+        for (NSDictionary *o in opts) {
+            if (![o isKindOfClass:[NSDictionary class]]) continue;
+            [text appendFormat:@"\n%@. %@", o[@"k"] ?: @"", o[@"t"] ?: @""];
+        }
+    }
+    [text appendFormat:@"\n答案：%@", item[@"ans"] ?: @""];
     [UIPasteboard generalPasteboard].string = text;
-    [[CXHUD shared] setStatus:@"已复制缓存题"];
+    [[CXHUD shared] setStatus:@"已复制缓存题（含选项）"];
 }
 
 - (void)clearHistory {
@@ -454,7 +460,6 @@
     c.bankEnabled = _bankOn.isOn;
     c.bankURL = _bankURL.text ?: @"";
     c.bankToken = _bankToken.text ?: @"";
-    c.forceWrite = _forceWrite.isOn;
     c.autoFill = _autoFill.isOn;
     c.probeEnabled = _probe.isOn;
     c.bankJSON = _bankJSONView.text ?: @"";

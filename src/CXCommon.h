@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-#define CX_VERSION @"1.6.4"
+#define CX_VERSION @"1.7.0"
 #define CXLOG(...) [CXLog write:__VA_ARGS__]
 
 @interface CXLog : NSObject
@@ -41,6 +41,13 @@ UIViewController *CXTopViewController(void);
 /// 学习通会打乱选项顺序：只有选项内容跟着字母位次一起变时指纹才变，
 /// 这样同题干不同选项不会被当成同一题串答案。
 NSString *CXQuestionFP(NSString *stem, NSArray *opts);
+
+/// 把一组答案文本按当前选项列表反查成字母。文本精确/包含匹配当前选项的 t。
+/// 学习通选项会乱序，题库/缓存存的字母不可靠，必须用文本做锚点重新定位。
+NSArray *CXLettersForTexts(NSArray *texts, NSArray *opts);
+
+/// 把答案字母数组按选项快照转成对应的文本数组（存储缓存时用）。
+NSArray *CXTextsForLetters(NSArray *letters, NSArray *opts);
 
 /// API Key 存系统钥匙串，避免 NSUserDefaults 明文落盘被 Filza 直接读到。
 @interface CXKeychain : NSObject

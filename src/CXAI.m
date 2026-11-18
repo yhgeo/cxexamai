@@ -439,9 +439,13 @@ static NSString *const kSystemPrompt =
         return;
     }
     NSNumber *idx = q[@"idx"] ?: @0;
-    NSData *ld = [NSJSONSerialization dataWithJSONObject:ans[@"answer"] ?: @[] options:0 error:nil];
+    NSArray *letters = ans[@"answer"] ?: @[];
+    NSData *ld = [NSJSONSerialization dataWithJSONObject:letters options:0 error:nil];
     NSData *td = [NSJSONSerialization dataWithJSONObject:@[ans[@"text"] ?: @""] options:0 error:nil];
     NSString *h = q[@"h"] ?: @"";
+    // 诊断：打印当前页面选项与答案文本，核对字母与视觉顺序是否对得上
+    CXLOG(@"回填准备 idx=%@ h=%@ letters=%@ opts=%@ frame=%@ url=%@",
+          idx, h, [letters componentsJoinedByString:@""], q[@"opts"] ?: @[], frame ? @"有" : @"无", nowURL);
     NSString *js = [NSString stringWithFormat:@"window.__cxFill&&window.__cxFill(%@,%@,%@,\"%@\");",
                     idx,
                     [[NSString alloc] initWithData:ld encoding:NSUTF8StringEncoding],
@@ -449,8 +453,8 @@ static NSString *const kSystemPrompt =
                     h];
     dispatch_async(dispatch_get_main_queue(), ^{
         void (^done)(id, NSError *) = ^(id r, NSError *e) {
-            if (e) CXLOG(@"回填失败 %@", e.localizedDescription);
-            else CXLOG(@"回填指令已下发 #%@", idx);
+            if (e) CXLOG(@"回填失败 idx=%@ %@", idx, e.localizedDescription);
+            else CXLOG(@"回填指令已下发 idx=%@ JS返回=%@（详细点击结果见 [js] 日志）", idx, r ?: @"nil");
         };
         if (frame) {
             [wv evaluateJavaScript:js inFrame:frame inContentWorld:WKContentWorld.pageWorld completionHandler:done];
