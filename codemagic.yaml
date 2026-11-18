@@ -1,0 +1,50 @@
+workflows:
+  build-dylib:
+    name: CXExamAI dylib
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+
+    environment:
+      vars:
+        VERSION: 1.6.4
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+
+    scripts:
+      - name: 生成 JS 内嵌头文件
+        script: |
+          set -e
+          xxd -i src/cx-core.js | sed 's/src_cx_core_js/cx_core_js/g' > src/cx-core.js.h
+          head -3 src/cx-core.js.h
+
+      - name: 编译 arm64 dylib
+        script: |
+          set -e
+          xcrun --sdk iphoneos clang -arch arm64 -dynamiclib -O2 \
+            -miphoneos-version-min=15.0 -fobjc-arc -Isrc \
+            -framework Foundation -framework UIKit -framework WebKit \
+            -framework QuartzCore -framework CoreGraphics -framework Security \
+            -install_name @executable_path/Frameworks/CXExamAI.dylib \
+            -o CXExamAI.dylib src/*.m
+          ls -lh CXExamAI.dylib
+          file CXExamAI.dylib
+
+      - name: ldid 签名（TrollStore/TrollFools）
+        script: |
+          brew install ldid >/dev/null 2>&1 || true
+          ldid -S CXExamAI.dylib || echo "ldid 失败，TrollFools 注入时会重新签名"
+
+      - name: 生成带版本号产物
+        script: |
+          set -e
+          cp CXExamAI.dylib "CXExamAI_v${VERSION}.dylib"
+          ls -lh CXExamAI*.dylib
+
+    artifacts:
+      - CXExamAI.dylib
+      - CXExamAI_v*.dylib
