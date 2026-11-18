@@ -1,8 +1,10 @@
 name: build-dylib
 
 on:
-  # push 自动构建已迁移到 Codemagic（见仓库根目录 codemagic.yaml），
-  # 这里保留手动触发作为备用，避免私有仓库 macOS 分钟数被自动跑光。
+  push:
+    branches: [ main, master ]
+    paths-ignore:
+      - '**.md'
   workflow_dispatch:
 
 permissions:
