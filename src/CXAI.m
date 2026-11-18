@@ -88,7 +88,7 @@ static NSString *const kSystemPrompt =
 }
 
 - (NSString *)cacheKey:(NSDictionary *)q {
-    return [NSString stringWithFormat:@"%lu", (unsigned long)[(q[@"stem"] ?: @"") hash]];
+    return [NSString stringWithFormat:@"%lu", (unsigned long)[CXQuestionFP(q[@"stem"] ?: @"", q[@"opts"] ?: @[]) hash]];
 }
 
 #pragma mark - 求解
@@ -103,9 +103,9 @@ static NSString *const kSystemPrompt =
         if (bankAns && ([(NSArray *)bankAns[@"answer"] count] || [(NSString *)bankAns[@"text"] length])) {
             CXLOG(@"题库命中 %@", bankAns);
             dispatch_async(dispatch_get_main_queue(), ^{
-                [[CXHUD shared] showAnswer:bankAns question:stem source:bankSource ?: @"题库"];
+                [[CXHUD shared] showAnswer:bankAns question:stem options:(question[@"opts"] ?: @[]) source:bankSource ?: @"题库"];
                 [strongSelf fill:bankAns question:question webView:webView frame:frame];
-                [[CXHistory shared] addStem:stem type:question[@"type"] ?: @"" answer:bankAns[@"answer"] ?: @[] text:bankAns[@"text"] ?: @""];
+                [[CXHistory shared] addStem:stem options:(question[@"opts"] ?: @[]) type:question[@"type"] ?: @"" answer:bankAns[@"answer"] ?: @[] text:bankAns[@"text"] ?: @""];
             });
             return;
         }
@@ -123,7 +123,7 @@ static NSString *const kSystemPrompt =
     if (cached) {
         CXLOG(@"命中缓存，直接回填");
         dispatch_async(dispatch_get_main_queue(), ^{
-            [[CXHUD shared] showAnswer:cached question:stem source:@"内存缓存"];
+            [[CXHUD shared] showAnswer:cached question:stem options:(question[@"opts"] ?: @[]) source:@"内存缓存"];
             [self fill:cached question:question webView:webView frame:frame];
         });
         return;
@@ -316,12 +316,13 @@ static NSString *const kSystemPrompt =
             return;
         }
         [[CXHistory shared] addStem:question[@"stem"] ?: @""
+                            options:(question[@"opts"] ?: @[])
                                type:payload[@"type"] ?: @""
                              answer:ans[@"answer"] ?: @[]
                                text:ans[@"text"] ?: @""];
         if ([ans[@"answer"] count]) strongSelf.cache[key] = ans;
         dispatch_async(dispatch_get_main_queue(), ^{
-            [[CXHUD shared] showAnswer:ans question:question[@"stem"] source:@"大模型"];
+            [[CXHUD shared] showAnswer:ans question:question[@"stem"] options:(question[@"opts"] ?: @[]) source:@"大模型"];
             [strongSelf fill:ans question:question webView:weakWV frame:frame];
             @synchronized (strongSelf.inflight) { [strongSelf.inflight removeObject:key]; }
         });
@@ -329,6 +330,42 @@ static NSString *const kSystemPrompt =
 }
 
 #pragma mark - 解析
+
+// 把 answer 字段（数组或字符串）拆成候选 token。
+// 每个 token 要么本身是 "A"/"AB"，要么是 "A. xxx" 里 "A." 这样的前缀。
+- (NSArray<NSString *> *)answerTokens:(id)answer {
+    NSMutableArray *out = [NSMutableArray array];
+    NSArray *raw = nil;
+    if ([answer isKindOfClass:[NSArray class]]) raw = answer;
+    else if ([answer isKindOfClass:[NSString class]]) raw = @[answer];
+    for (id v in raw) {
+        if (![v isKindOfClass:[NSString class]]) continue;
+        NSString *s = [v stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (s.length == 0) continue;
+        // 整串就是字母组合，如 "A" / "ABD"
+        BOOL allLetters = YES;
+        for (NSUInteger i = 0; i < s.length; i++) {
+            unichar c = [s characterAtIndex:i];
+            if (!((c >= 'A' && c <= 'H') || (c >= 'a' && c <= 'h'))) { allLetters = NO; break; }
+        }
+        if (allLetters) {
+            // "ABD" 视为 A/B/D 三个独立答案
+            for (NSUInteger i = 0; i < s.length; i++) [out addObject:[s substringWithRange:NSMakeRange(i, 1)]];
+            continue;
+        }
+        // "A. 选项文本" / "A、xxx" / "(A) xxx" / "A xxx"：取开头的字母段
+        NSRange m = [s rangeOfString:@"^[\\(（\\s]*([A-Ha-h]+)[\\.\\)、,，:：\\s]" options:NSRegularExpressionSearch];
+        if (m.location != NSNotFound) {
+            NSString *letters = [s substringWithRange:m];
+            NSCharacterSet *letterSet = [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHabcdefgh"];
+            for (NSUInteger i = 0; i < letters.length; i++) {
+                unichar c = [letters characterAtIndex:i];
+                if ([letterSet characterIsMember:c]) [out addObject:[NSString stringWithFormat:@"%C", c]];
+            }
+        }
+    }
+    return out;
+}
 
 - (NSDictionary *)parseAnswer:(NSString *)content {
     NSString *s = [content stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -348,20 +385,13 @@ static NSString *const kSystemPrompt =
 
         id answer = d[@"answer"];
         NSMutableArray *letters = [NSMutableArray array];
-        if ([answer isKindOfClass:[NSArray class]]) {
-            for (id v in answer) {
-                if (![v isKindOfClass:[NSString class]]) continue;
-                NSString *u = [v uppercaseString];
-                for (NSUInteger i = 0; i < u.length; i++) {
-                    unichar c = [u characterAtIndex:i];
-                    if (c >= 'A' && c <= 'H') [letters addObject:[NSString stringWithFormat:@"%C", c]];
-                }
-            }
-        } else if ([answer isKindOfClass:[NSString class]]) {
-            NSString *u = [answer uppercaseString];
-            for (NSUInteger i = 0; i < u.length; i++) {
-                unichar c = [u characterAtIndex:i];
-                if (c >= 'A' && c <= 'H') [letters addObject:[NSString stringWithFormat:@"%C", c]];
+        // 按 token 抽取：只认独立的单个字母或 "A." "A、" "A " 这类选项字母，
+        // 避免模型输出 "答案是 A 不是 B" 时被抽成 A+B。
+        for (NSString *v in [self answerTokens:answer]) {
+            NSString *u = [v uppercaseString];
+            unichar c = u.length ? [u characterAtIndex:0] : 0;
+            if (u.length <= 2 && c >= 'A' && c <= 'H') {
+                [letters addObject:[NSString stringWithFormat:@"%C", c]];
             }
         }
         NSArray *uniq = [[NSSet setWithArray:letters] allObjects];
@@ -395,6 +425,14 @@ static NSString *const kSystemPrompt =
 
 - (void)fill:(NSDictionary *)ans question:(NSDictionary *)q webView:(WKWebView *)wv frame:(WKFrameInfo *)frame {
     if (!wv) return;
+    // 作答有延迟，延迟期间用户可能翻页。URL 变了就放弃回填，避免填满页的题
+    NSString *grabURL = q[@"_u"];
+    NSString *nowURL = wv.URL.absoluteString;
+    if (grabURL.length && nowURL.length && ![grabURL isEqualToString:nowURL]) {
+        CXLOG(@"页面已跳转，放弃回填 grab=%@ now=%@", grabURL, nowURL);
+        [[CXHUD shared] setStatus:@"已跳页·跳过"];
+        return;
+    }
     if (![CXConfig shared].autoFill) {
         CXLOG(@"实验性自动填答未开启，仅展示答案");
         [[CXHUD shared] setStatus:@"仅展示 · 自动填答未开启"];

@@ -297,6 +297,14 @@
     return out;
   }
 
+  // 题干 + 按字母排序的选项内容 → 去重指纹。选项乱序视为不同题，
+  // 避免同一题干换了一套选项时被 SENT 当成已发过而漏答/串答案。
+  function fpOf(q) {
+    var parts = (q.opts || []).map(function (o) { return (o.k || '') + '=' + (o.t || ''); });
+    parts.sort();
+    return q.stem + '|' + parts.join(';');
+  }
+
   function collect(force) {
     var found = collectChaoxing();
     if (!found.length) found = collectFromContainers();
@@ -312,9 +320,11 @@
     var list = [];
     for (var i = 0; i < found.length; i++) {
       var q = found[i];
+      var fp = hash(fpOf(q));
+      q._fp = fp;
       var now = Date.now();
-      if (!force && SENT[q.h] && now - SENT[q.h] < 300000) continue;
-      SENT[q.h] = now;
+      if (!force && SENT[fp] && now - SENT[fp] < 300000) continue;
+      SENT[fp] = now;
       list.push(q);
     }
     if (list.length) {
@@ -594,9 +604,22 @@
     }
   }
 
+  // 只按内容 hash 精确定位。绝不按 idx 回退：作答有 1.5s 起 + 每题 2s 的延迟，
+  // 延迟期间用户可能已翻页，Q 被 tick() 重建，此时 idx 会指向新页另一道题。
   function findQ(idx, h) {
     for (var i = 0; i < Q.length; i++) if (Q[i].h === h) return Q[i];
-    return Q[idx] || null;
+    return null;
+  }
+
+  // 题目节点是否仍挂在文档树上。翻页/切题后旧节点被移除，必须放弃回填，
+  // 否则 evaluateJavaScript 可能命中复用 DOM 的别处元素。
+  function nodeLive(node) {
+    if (!node) return false;
+    try {
+      if (typeof node.isConnected === 'boolean') return node.isConnected;
+      var d = node.ownerDocument;
+      return !!(d && d.documentElement && d.documentElement.contains(node));
+    } catch (e) { return false; }
   }
 
   window.__cxFill = function (idx, letters, texts, h) {
@@ -606,14 +629,15 @@
       post('log', 'fill error ' + (e && e.message ? e.message : e));
       try {
         var q2 = findQ(idx, h);
-        if (q2 && q2.node) { fillTexts(q2.node, texts); post('filled', idx); }
+        if (q2 && nodeLive(q2.node)) { fillTexts(q2.node, texts); post('filled', idx); }
       } catch (e2) {}
     }
   };
 
   function doFill(idx, letters, texts, h) {
     var q = findQ(idx, h), i;
-    if (!q || !q.node) { post('log', 'fill miss ' + idx + ' q=' + Q.length); return; }
+    if (!q || !q.node) { post('log', 'fill miss ' + idx + ' h=' + h + ' q=' + Q.length); return; }
+    if (!nodeLive(q.node)) { post('log', 'fill skip: node detached ' + h); return; }
 
     var elems = [];
     if (letters && letters.length) {

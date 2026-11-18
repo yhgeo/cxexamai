@@ -27,7 +27,7 @@ jobs:
           xcrun --sdk iphoneos clang -arch arm64 -dynamiclib -O2 \
             -miphoneos-version-min=15.0 -fobjc-arc -Isrc \
             -framework Foundation -framework UIKit -framework WebKit \
-            -framework QuartzCore -framework CoreGraphics \
+            -framework QuartzCore -framework CoreGraphics -framework Security \
             -install_name @executable_path/Frameworks/CXExamAI.dylib \
             -o CXExamAI.dylib src/*.m
           ls -lh CXExamAI.dylib

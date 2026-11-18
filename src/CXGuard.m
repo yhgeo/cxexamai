@@ -11,9 +11,13 @@
 @implementation UIView (CXGuard)
 
 - (BOOL)cx_drawViewHierarchyInRect:(CGRect)rect afterScreenUpdates:(BOOL)after {
-    // 只有接近整屏的抓取才认为是截屏，避免普通离屏渲染把 HUD 抖掉
+    // 只有接近整屏的抓取才认为是截屏，避免普通离屏渲染（大图 cell 等）把 HUD 抖掉。
+    // 用屏幕面积比例判断，比写死 300×300 更稳，兼容不同机型分辨率。
     CGFloat area = CGRectGetWidth(rect) * CGRectGetHeight(rect);
-    if (area > 300 * 300) {
+    CGSize screen = [UIScreen mainScreen].bounds.size;
+    CGFloat screenArea = screen.width * screen.height;
+    CGFloat ratio = screenArea > 0 ? area / screenArea : 0;
+    if (ratio > 0.85) {
         [[CXHUD shared] hideNow];
     }
     return [self cx_drawViewHierarchyInRect:rect afterScreenUpdates:after];

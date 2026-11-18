@@ -70,13 +70,16 @@ static char kInstalledKey;
         WKFrameInfo *frame = message.frameInfo;
         NSString *pageURL = body[@"u"] ?: @"";
         NSInteger i = 0;
-        for (NSDictionary *q in list) {
-            if (![q isKindOfClass:[NSDictionary class]]) continue;
+        for (NSDictionary *q0 in list) {
+            if (![q0 isKindOfClass:[NSDictionary class]]) continue;
+            NSMutableDictionary *q = [q0 mutableCopy];
+            q[@"_u"] = pageURL;   // 抓题时的页面 URL，回填前校验是否仍在同页
             NSString *stem = q[@"stem"];
             if (stem.length < 2) continue;
-            // 同一题在不同页面（上一题/下一题）算不同的 key，允许回去重答
+            // 指纹=题干+选项内容，选项乱序视为不同；再拼页面 URL，回去重答也算不同
             NSString *key = [NSString stringWithFormat:@"%lu-%lu",
-                             (unsigned long)[stem hash], (unsigned long)[pageURL hash]];
+                             (unsigned long)[CXQuestionFP(stem, q[@"opts"] ?: @[]) hash],
+                             (unsigned long)[pageURL hash]];
             @synchronized (gAnswered) {
                 NSNumber *ts = gAnswered[key];
                 NSTimeInterval now = [NSDate date].timeIntervalSince1970;

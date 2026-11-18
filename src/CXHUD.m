@@ -70,7 +70,7 @@
     UIStackView *_baseStack, *_modelStack, *_logStack, *_historyStack;
 
     UITextField *_base, *_model, *_key;
-    UISwitch *_auto, *_guard, *_hud, *_vision, *_bankOn, *_forceWrite, *_autoFill;
+    UISwitch *_auto, *_guard, *_hud, *_vision, *_bankOn, *_forceWrite, *_autoFill, *_probe;
     UIScrollView *_scroll;
     UITextField *_bankURL, *_bankToken;
     UITextView *_bankJSONView;
@@ -142,6 +142,8 @@
     _autoFill.on = c.autoFill;
     _forceWrite = [UISwitch new];
     _forceWrite.on = c.forceWrite;
+    _probe = [UISwitch new];
+    _probe.on = c.probeEnabled;
 
     _delayLabel = [UILabel new];
     _delayLabel.font = [UIFont systemFontOfSize:14];
@@ -156,6 +158,7 @@
                         [self row:@"识别题目图片（需视觉模型）" control:_vision],
                         [self row:@"实验性：自动填答（点选项/填文本）" control:_autoFill],
                         [self row:@"实验性：点击失败时写答案域" control:_forceWrite],
+                        [self row:@"调试：原生视图探针（需重启App）" control:_probe],
                         _delayLabel, _delay,
                         [self button:@"重置悬浮窗位置与缩放" action:@selector(resetPanelPos)],
                         [self label:@"面板可拖动、可双指缩放，超出屏幕会自动回弹。"]] ) {
@@ -453,6 +456,7 @@
     c.bankToken = _bankToken.text ?: @"";
     c.forceWrite = _forceWrite.isOn;
     c.autoFill = _autoFill.isOn;
+    c.probeEnabled = _probe.isOn;
     c.bankJSON = _bankJSONView.text ?: @"";
     c.startDelay = _delay.value;
     [c save];
@@ -508,6 +512,7 @@
     UIVisualEffectView *_panel;
     UILabel *_titleLabel;
     UILabel *_qLabel;
+    UILabel *_optionsLabel;
     UILabel *_bigLabel;
     UILabel *_aTextLabel;
     UILabel *_hintLabel;
@@ -613,6 +618,12 @@
     _qLabel.numberOfLines = 3;
     _qLabel.text = @"等待抓题…";
 
+    _optionsLabel = [[UILabel alloc] init];
+    _optionsLabel.textColor = [UIColor colorWithWhite:1 alpha:0.78];
+    _optionsLabel.font = [UIFont systemFontOfSize:11];
+    _optionsLabel.numberOfLines = 0;
+    _optionsLabel.text = @"";
+
     _answerBox = [[UIView alloc] init];
     _answerBox.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
     _answerBox.layer.cornerRadius = 10;
@@ -661,7 +672,7 @@
     row.distribution = UIStackViewDistributionFillEqually;
     [row.heightAnchor constraintEqualToConstant:34].active = YES;
 
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[head, _qLabel, _answerBox, row]];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[head, _qLabel, _optionsLabel, _answerBox, row]];
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 10;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -785,12 +796,16 @@
     _panel.hidden = NO;
     _panelShown = YES;
     _qLabel.text = @"正在重新抓题…";
+    _optionsLabel.text = @"";
+    _optionsLabel.hidden = YES;
     _bigLabel.text = @"";
     _aTextLabel.text = @"";
 }
 
 - (void)copyAnswer {
-    NSString *text = [NSString stringWithFormat:@"%@ %@", _bigLabel.text ?: @"", _aTextLabel.text ?: @""];
+    NSString *opts = _optionsLabel.hidden ? @"" : [NSString stringWithFormat:@"\n选项：\n%@", _optionsLabel.text ?: @""];
+    NSString *text = [NSString stringWithFormat:@"%@\n%@%@", _qLabel.text ?: @"", _bigLabel.text ?: @"", opts];
+    if (_aTextLabel.text.length > 0) text = [text stringByAppendingFormat:@"\n%@", _aTextLabel.text];
     if (text.length == 0) return;
     [UIPasteboard generalPasteboard].string = text;
     [[CXHUD shared] setStatus:@"已复制答案"];
@@ -829,15 +844,49 @@
     });
 }
 
-- (void)showAnswer:(NSDictionary *)ans question:(NSString *)stem source:(NSString *)source {
+- (void)showAnswer:(NSDictionary *)ans question:(NSString *)stem options:(NSArray *)options source:(NSString *)source {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSArray *letters = ans[@"answer"] ?: @[];
         NSString *text = ans[@"text"] ?: @"";
         self->_titleLabel.text = [NSString stringWithFormat:@"CXExamAI · %@", source ?: @""];
         self->_qLabel.text = stem.length ? stem : @"（未取到题干）";
+
+        // 选项列表：命中的选项用蓝色加粗高亮，方便核对是否与原题一致
+        if ([options isKindOfClass:[NSArray class]] && options.count) {
+            NSSet *chosen = [NSSet setWithArray:letters];
+            NSMutableAttributedString *optText = [NSMutableAttributedString new];
+            for (NSDictionary *o in options) {
+                if (![o isKindOfClass:[NSDictionary class]]) continue;
+                NSString *k = o[@"k"] ?: @"";
+                NSString *t = o[@"t"] ?: @"";
+                if (!k.length && !t.length) continue;
+                NSString *line = [NSString stringWithFormat:@"%@. %@\n", k, t];
+                BOOL hit = [chosen containsObject:k];
+                NSDictionary *attr = @{NSForegroundColorAttributeName: hit ? [UIColor systemBlueColor] : [UIColor colorWithWhite:1 alpha:0.78],
+                                       NSFontAttributeName: hit ? [UIFont boldSystemFontOfSize:11] : [UIFont systemFontOfSize:11]};
+                [optText appendAttributedString:[[NSAttributedString alloc] initWithString:line attributes:attr]];
+            }
+            if (optText.length > 0) {
+                // 去掉末尾换行
+                [optText deleteCharactersInRange:NSMakeRange(optText.length - 1, 1)];
+                self->_optionsLabel.attributedText = optText;
+                self->_optionsLabel.hidden = NO;
+            } else {
+                self->_optionsLabel.text = @"";
+                self->_optionsLabel.hidden = YES;
+            }
+        } else {
+            self->_optionsLabel.text = @"";
+            self->_optionsLabel.hidden = YES;
+        }
+
         self->_bigLabel.text = letters.count ? [letters componentsJoinedByString:@" "] : @"";
         self->_aTextLabel.text = text.length ? text : (letters.count ? @"" : @"（空答案）");
-        self->_hintLabel.text = letters.count ? @"已出答案，正在点选" : @"已出答案，正在填入";
+        if (![CXConfig shared].autoFill) {
+            self->_hintLabel.text = @"已出答案 · 仅展示（自动填答关）";
+        } else {
+            self->_hintLabel.text = letters.count ? @"已出答案，正在点选" : @"已出答案，正在填入";
+        }
         if ([UIScreen mainScreen].isCaptured) return;
         self->_panel.hidden = NO;
         self->_panelShown = YES;

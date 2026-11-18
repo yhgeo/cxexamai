@@ -1,4 +1,5 @@
 #import "CXCommon.h"
+#import <Security/Security.h>
 
 static NSString *const kLogName = @"CXExamAI.log";
 static dispatch_queue_t gLogQueue;
@@ -90,7 +91,20 @@ static NSDateFormatter *gFmt;
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     self.baseURL = [d stringForKey:@"cx_base"] ?: @"https://api.deepseek.com";
     self.model = [d stringForKey:@"cx_model"] ?: @"deepseek-chat";
-    self.apiKey = [d stringForKey:@"cx_key"] ?: @"";
+    // API Key 优先从钥匙串读；兼容旧版本：若钥匙串为空则从 NSUserDefaults
+    // 读旧明文并迁移进钥匙串，随后清除明文。
+    NSString *kcKey = [CXKeychain getStringForKey:@"apiKey"];
+    if (kcKey.length) {
+        self.apiKey = kcKey;
+    } else {
+        NSString *legacy = [d stringForKey:@"cx_key"] ?: @"";
+        self.apiKey = legacy;
+        if (legacy.length) {
+            [CXKeychain setString:legacy forKey:@"apiKey"];
+            [d removeObjectForKey:@"cx_key"];
+            [d synchronize];
+        }
+    }
     id autoObj = [d objectForKey:@"cx_auto"];
     self.autoAnswer = autoObj ? [d boolForKey:@"cx_auto"] : YES;
     id guardObj = [d objectForKey:@"cx_guard"];
@@ -107,13 +121,17 @@ static NSDateFormatter *gFmt;
     self.bankJSON = [d stringForKey:@"cx_bank_json"] ?: @"";
     self.forceWrite = [d boolForKey:@"cx_force_write"];
     self.autoFill = [d boolForKey:@"cx_auto_fill"];
+    self.probeEnabled = [d boolForKey:@"cx_probe"];
 }
 
 - (void)save {
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     [d setObject:self.baseURL forKey:@"cx_base"];
     [d setObject:self.model forKey:@"cx_model"];
-    [d setObject:self.apiKey forKey:@"cx_key"];
+    // 钥匙串存 Key，NSUserDefaults 不再保留明文
+    if (self.apiKey.length) [CXKeychain setString:self.apiKey forKey:@"apiKey"];
+    else [CXKeychain deleteKey:@"apiKey"];
+    [d removeObjectForKey:@"cx_key"];
     [d setBool:self.autoAnswer forKey:@"cx_auto"];
     [d setBool:self.guardEnabled forKey:@"cx_guard"];
     [d setBool:self.hudEnabled forKey:@"cx_hud"];
@@ -126,10 +144,78 @@ static NSDateFormatter *gFmt;
     [d setObject:self.bankJSON ?: @"" forKey:@"cx_bank_json"];
     [d setBool:self.forceWrite forKey:@"cx_force_write"];
     [d setBool:self.autoFill forKey:@"cx_auto_fill"];
+    [d setBool:self.probeEnabled forKey:@"cx_probe"];
     [d synchronize];
 }
 
 @end
+
+@implementation CXKeychain
+
++ (NSString *)getStringForKey:(NSString *)key {
+    if (key.length == 0) return nil;
+    NSDictionary *q = @{(__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                        (__bridge id)kSecAttrService: @"CXExamAI",
+                        (__bridge id)kSecAttrAccount: key,
+                        (__bridge id)kSecReturnData: @YES,
+                        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne};
+    CFTypeRef out = NULL;
+    OSStatus st = SecItemCopyMatching((__bridge CFDictionaryRef)q, &out);
+    if (st == errSecSuccess && out) {
+        NSData *d = (__bridge_transfer NSData *)out;
+        return [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+    }
+    return nil;
+}
+
++ (void)setString:(NSString *)value forKey:(NSString *)key {
+    if (key.length == 0) return;
+    NSData *data = [(value ?: @"") dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary *base = @{(__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                           (__bridge id)kSecAttrService: @"CXExamAI",
+                           (__bridge id)kSecAttrAccount: key};
+    NSDictionary *attrs = @{(__bridge id)kSecValueData: data,
+                            (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleAfterFirstUnlock};
+    OSStatus st = SecItemCopyMatching((__bridge CFDictionaryRef)base, NULL);
+    if (st == errSecSuccess) {
+        SecItemUpdate((__bridge CFDictionaryRef)base, (__bridge CFDictionaryRef)attrs);
+    } else if (st == errSecItemNotFound) {
+        NSMutableDictionary *add = [base mutableCopy];
+        [add addEntriesFromDictionary:attrs];
+        SecItemAdd((__bridge CFDictionaryRef)add, NULL);
+    }
+}
+
++ (void)deleteKey:(NSString *)key {
+    if (key.length == 0) return;
+    NSDictionary *q = @{(__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                        (__bridge id)kSecAttrService: @"CXExamAI",
+                        (__bridge id)kSecAttrAccount: key};
+    SecItemDelete((__bridge CFDictionaryRef)q);
+}
+
+@end
+
+NSString *CXQuestionFP(NSString *stem, NSArray *opts) {
+    NSMutableString *fp = [NSMutableString stringWithString:stem ?: @""];
+    if ([opts isKindOfClass:[NSArray class]] && opts.count) {
+        // 按字母 k 排序，让同一套选项无论原始采集顺序如何都得到同一指纹
+        NSArray *sorted = [opts sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+            NSString *ka = [a isKindOfClass:[NSDictionary class]] ? (a[@"k"] ?: @"") : @"";
+            NSString *kb = [b isKindOfClass:[NSDictionary class]] ? (b[@"k"] ?: @"") : @"";
+            return [ka compare:kb];
+        }];
+        [fp appendString:@"|"];
+        for (NSDictionary *o in sorted) {
+            if (![o isKindOfClass:[NSDictionary class]]) continue;
+            NSString *k = o[@"k"] ?: @"";
+            NSString *t = o[@"t"] ?: @"";
+            // 只取文本，去掉可能的 A. 前缀噪声，按内容比对
+            [fp appendFormat:@"%@=%@;", k, t];
+        }
+    }
+    return [fp copy];
+}
 
 UIViewController *CXTopViewController(void) {
     UIWindow *keyWin = nil;

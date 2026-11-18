@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-#define CX_VERSION @"1.6.2"
+#define CX_VERSION @"1.6.4"
 #define CXLOG(...) [CXLog write:__VA_ARGS__]
 
 @interface CXLog : NSObject
@@ -28,6 +28,7 @@
 @property (nonatomic, copy) NSString *bankJSON;   // OCS 题库配置（JSON 数组）
 @property (nonatomic, assign) BOOL forceWrite;    // 实验性：点击失败时直接写答案域
 @property (nonatomic, assign) BOOL autoFill;      // 实验性：自动填答总开关
+@property (nonatomic, assign) BOOL probeEnabled;  // 调试：原生视图探针（默认关，避免生产环境 hook）
 + (instancetype)shared;
 - (void)reload;
 - (void)save;
@@ -35,3 +36,15 @@
 
 /// 取当前最顶层控制器（用于弹设置页）
 UIViewController *CXTopViewController(void);
+
+/// 题干 + 按字母排序的选项文本 → 指纹字符串。
+/// 学习通会打乱选项顺序：只有选项内容跟着字母位次一起变时指纹才变，
+/// 这样同题干不同选项不会被当成同一题串答案。
+NSString *CXQuestionFP(NSString *stem, NSArray *opts);
+
+/// API Key 存系统钥匙串，避免 NSUserDefaults 明文落盘被 Filza 直接读到。
+@interface CXKeychain : NSObject
++ (NSString *)getStringForKey:(NSString *)key;
++ (void)setString:(NSString *)value forKey:(NSString *)key;
++ (void)deleteKey:(NSString *)key;
+@end

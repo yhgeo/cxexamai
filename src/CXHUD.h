@@ -7,7 +7,7 @@
 @property (nonatomic, copy) void (^onManualTrigger)(void);
 - (void)install;
 - (void)setStatus:(NSString *)status;
-- (void)showAnswer:(NSDictionary *)ans question:(NSString *)stem source:(NSString *)source;
+- (void)showAnswer:(NSDictionary *)ans question:(NSString *)stem options:(NSArray *)options source:(NSString *)source;
 - (void)setQuestionText:(NSString *)text;
 - (void)setVisible:(BOOL)visible;
 - (void)hideTemporarily:(NSTimeInterval)seconds;

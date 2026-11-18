@@ -36,7 +36,7 @@ static const NSUInteger kMaxItems = 100;
     [d writeToFile:[self path] atomically:YES];
 }
 
-- (void)addStem:(NSString *)stem type:(NSString *)type answer:(NSArray *)answer text:(NSString *)text {
+- (void)addStem:(NSString *)stem options:(NSArray *)options type:(NSString *)type answer:(NSArray *)answer text:(NSString *)text {
     if (stem.length == 0) return;
     [_lock lock];
     if (!_items) [self load];
@@ -50,6 +50,7 @@ static const NSUInteger kMaxItems = 100;
     NSDictionary *item = @{@"t": @([[NSDate date] timeIntervalSince1970]),
                            @"type": type ?: @"",
                            @"stem": stem,
+                           @"fp": CXQuestionFP(stem, options),
                            @"ans": ans.length ? ans : @"（空）",
                            @"a": answer ?: @[],
                            @"x": text ?: @""};
@@ -67,13 +68,22 @@ static const NSUInteger kMaxItems = 100;
     return copy;
 }
 
-- (NSDictionary *)answerForStem:(NSString *)stem {
+- (NSDictionary *)answerForStem:(NSString *)stem options:(NSArray *)options {
     if (stem.length == 0) return nil;
+    NSString *fp = CXQuestionFP(stem, options);
     [_lock lock];
     if (!_items) [self load];
     NSDictionary *hit = nil;
+    // 第一轮：新格式按指纹精确匹配（题干+选项内容，选项乱序不会串答案）
     for (NSDictionary *item in _items) {
-        if ([item[@"stem"] isEqualToString:stem]) { hit = item; break; }
+        NSString *ifp = item[@"fp"];
+        if (ifp.length && [ifp isEqualToString:fp]) { hit = item; break; }
+    }
+    // 第二轮：兼容旧格式缓存（无 fp 字段），仅当题干完全相同才回退命中
+    if (!hit) {
+        for (NSDictionary *item in _items) {
+            if (!item[@"fp"] && [item[@"stem"] isEqualToString:stem]) { hit = item; break; }
+        }
     }
     [_lock unlock];
     if (!hit) return nil;

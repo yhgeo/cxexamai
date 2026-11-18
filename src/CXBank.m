@@ -65,20 +65,29 @@
     uniq = [uniq sortedArrayUsingSelector:@selector(compare:)];
     if (uniq.count) return @{@"answer": uniq, @"text": @""};
 
-    // 答案给的是文字（如“德国古典哲学”“两点论”），用选项文本反查字母
+    // 答案给的是文字（如"德国古典哲学""两点论"），用选项文本反查字母。
+    // 先做精确相等；没有精确匹配再退到"足够长的文本 + 单向包含"，避免
+    // "1"/"对"这种短文本命中一堆选项导致多选答错。
     if (options.count) {
         NSString *flat = [[trim lowercaseString] stringByReplacingOccurrencesOfString:@" " withString:@""];
-        NSMutableArray *byText = [NSMutableArray array];
+        NSMutableArray *exact = [NSMutableArray array];
+        NSMutableArray *loose = [NSMutableArray array];
         for (NSDictionary *o in options) {
             NSString *k = o[@"k"] ?: @"";
             NSString *t = o[@"t"] ?: @"";
             if (k.length == 0 || t.length == 0) continue;
             NSString *ft = [[t lowercaseString] stringByReplacingOccurrencesOfString:@" " withString:@""];
             if (ft.length == 0) continue;
-            if ([flat containsString:ft] || [ft containsString:flat]) [byText addObject:k];
+            if ([ft isEqualToString:flat] || [flat isEqualToString:ft]) {
+                [exact addObject:k];
+            } else if (ft.length >= 4 && flat.length >= 4 &&
+                       ([flat containsString:ft] || [ft containsString:flat])) {
+                [loose addObject:k];
+            }
         }
-        if (byText.count) {
-            NSArray *u2 = [[NSSet setWithArray:byText] allObjects];
+        NSArray *use = exact.count ? exact : loose;
+        if (use.count) {
+            NSArray *u2 = [[NSSet setWithArray:use] allObjects];
             u2 = [u2 sortedArrayUsingSelector:@selector(compare:)];
             return @{@"answer": u2, @"text": @""};
         }
@@ -105,8 +114,8 @@
    completion:(void (^)(NSDictionary *, NSString *))done {
     if (stem.length == 0) { done(nil, nil); return; }
 
-    // 1) 本地历史
-    NSDictionary *local = [[CXHistory shared] answerForStem:stem];
+    // 1) 本地历史（按题干+选项指纹匹配，选项乱序不会串答案）
+    NSDictionary *local = [[CXHistory shared] answerForStem:stem options:options];
     if (local && ([(NSArray *)local[@"answer"] count] || [(NSString *)local[@"text"] length])) {
         CXLOG(@"题库：本地命中");
         done(local, @"本地缓存");
@@ -164,8 +173,19 @@
         id root = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
         if (![root isKindOfClass:[NSDictionary class]]) { done(nil); return; }
         id code = root[@"code"];
-        BOOL ok = ([code respondsToSelector:@selector(integerValue)] && [code integerValue] == 1)
-               || [code isEqual:@"1"] || [code isEqual:@YES];
+        BOOL ok = NO;
+        if (code == nil || code == [NSNull null]) {
+            // 无 code 字段：带 data/answer 就当成功
+            ok = (root[@"data"] != nil || root[@"answer"] != nil);
+        } else if ([code isKindOfClass:[NSString class]]) {
+            NSString *cs = [(NSString *)code lowercaseString];
+            ok = ([cs isEqualToString:@"1"] || [cs isEqualToString:@"0"] ||
+                  [cs isEqualToString:@"200"] || [cs isEqualToString:@"success"] ||
+                  [cs isEqualToString:@"ok"] || [cs isEqualToString:@"true"]);
+        } else if ([code respondsToSelector:@selector(integerValue)]) {
+            NSInteger ci = [code integerValue];
+            ok = (ci == 0 || ci == 1 || ci == 200);
+        }
         if (!ok) {
             NSString *raw = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
             CXLOG(@"题库未命中: %@", [raw substringToIndex:MIN((NSUInteger)160, raw.length)]);
@@ -182,7 +202,10 @@
 
 + (void)requestSimple:(NSString *)stem type:(NSString *)type completion:(void (^)(NSDictionary *))done {
     CXConfig *c = [CXConfig shared];
-    NSCharacterSet *allowed = [NSCharacterSet URLQueryAllowedCharacterSet];
+    // URLQueryAllowedCharacterSet 把 + / & = 当合法字符放过，题干里的 "1+1" 到
+    // 服务端 query 解析会变空格。改用严格的字母数字+少数安全符号白名单。
+    NSMutableCharacterSet *allowed = [NSMutableCharacterSet alphanumericCharacterSet];
+    [allowed addCharactersInString:@"-_.~"];
     NSString *sep = [c.bankURL containsString:@"?"] ? @"&" : @"?";
     NSString *urlStr = [NSString stringWithFormat:@"%@%@question=%@&type=%@&token=%@",
                         c.bankURL, sep,
