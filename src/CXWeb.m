@@ -14,6 +14,7 @@ static NSHashTable *gWebViews;
 static NSHashTable *gExamWebViews;
 static NSMutableDictionary *gAnswered;   // hash -> 时间戳
 static NSTimeInterval gLastMsgAt = 0;
+static BOOL gForceAnswerOnce = NO;        // 手动触发时强制作答一次（无视 autoAnswer 开关）
 static char kInstalledKey;
 
 @interface CXWeb (Install)
@@ -62,10 +63,13 @@ static char kInstalledKey;
             [[CXHUD shared] setStatus:@"缺Key"];
             return;
         }
-        if (!cfg.autoAnswer) {
+        // 关闭自动答题时，仅手动"重新作答"强制求解一次；定时自动抓题仍被拦截。
+        // 手动触发会把 gForceAnswerOnce 置 YES，取用后立即清除，避免影响后续自动流程。
+        if (!cfg.autoAnswer && !gForceAnswerOnce) {
             [[CXHUD shared] setStatus:@"待触发"];
             return;
         }
+        gForceAnswerOnce = NO;   // 手动强制只作用于这一批题
 
         WKFrameInfo *frame = message.frameInfo;
         NSString *pageURL = body[@"u"] ?: @"";
@@ -125,6 +129,7 @@ static char kInstalledKey;
     gWebViews = [NSHashTable weakObjectsHashTable];
     gExamWebViews = [NSHashTable weakObjectsHashTable];
     gAnswered = [NSMutableDictionary dictionary];
+    gForceAnswerOnce = NO;
 
     BOOL a = CXSwizzleInstance([WKWebView class],
                                @selector(initWithFrame:configuration:),
@@ -241,7 +246,8 @@ static char kInstalledKey;
         return;
     }
     @synchronized (gAnswered) { [gAnswered removeAllObjects]; }
-    CXLOG(@"手动触发：webview %lu 个", (unsigned long)list.count);
+    gForceAnswerOnce = YES;   // 手动触发无视 autoAnswer 开关，强制作答一次
+    CXLOG(@"手动触发：webview %lu 个（强制作答）", (unsigned long)list.count);
     NSTimeInterval before = gLastMsgAt;
     [[CXHUD shared] setStatus:@"抓题中"];
 
